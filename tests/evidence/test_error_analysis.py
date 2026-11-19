@@ -1,6 +1,5 @@
 import pytest
-
-from opspilot.opspilot.evidence.error_analysis import calculate_error_rate
+from opspilot.evidence.error_analysis import calculate_error_rate
 
 
 @pytest.mark.parametrize(
