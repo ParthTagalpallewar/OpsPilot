@@ -1,0 +1,30 @@
+[project]
+name = "opspilot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Parth", email = "parth@example.com" }
+]
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+opspilot = "opspilot:main"
+
+[build-system]
+requires = ["uv_build>=0.13.9,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "ruff>=0.17.5",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I"]
