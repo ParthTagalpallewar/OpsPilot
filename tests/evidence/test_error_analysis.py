@@ -1,4 +1,5 @@
 import pytest
+
 from opspilot.evidence.error_analysis import calculate_error_rate
 
 
