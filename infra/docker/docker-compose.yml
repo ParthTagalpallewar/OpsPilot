@@ -1,0 +1,59 @@
+# OpsPilot local infrastructure: PostgreSQL (+ pgvector) and Redis.
+#
+# Run from the repository root:
+#   docker compose --env-file .env -f infra/docker/docker-compose.yml up -d
+#
+# Every variable has a default, so the stack also starts without a .env file.
+
+name: opspilot
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: opspilot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-opspilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opspilot_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-opspilot}
+    ports:
+      # Bound to localhost only, so the database is not exposed on your network.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Scripts here run once, when the data volume is first created.
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opspilot} -d ${POSTGRES_DB:-opspilot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: opspilot-redis
+    restart: unless-stopped
+    # appendonly: queued jobs survive a restart.
+    # noeviction: Redis never silently drops queue entries when memory is full.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:
