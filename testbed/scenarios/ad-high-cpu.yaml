@@ -1,0 +1,28 @@
+# Scenario definition: High CPU in the Ad service
+id: ad-high-cpu
+description: The ad service burns CPU, so GetAds slows down.
+fault_type: resource_cpu
+flag:
+  name: adHighCpu
+  variant: "on"
+  off_variant: "off"
+duration_minutes: 10
+settle_minutes: 3
+load_generator: required
+affected_service: ad
+visible_in_services: [ad, frontend]
+baseline:
+  cpu_percent_avg: 0.74
+  cpu_percent_max: 2.17
+  memory_mib_avg: 233.7
+observed_fault:
+  cpu_percent_avg: 398.0
+  memory_mib_avg: 242.9
+expected_root_cause: "adHighCpu flag makes the ad service consume about 4 CPU cores"
+expected_symptoms:
+  - "docker stats ad shows CPU near 400% (baseline under 3%)"
+  - "GetAds spans get slower in Jaeger"
+  - "no warn or error logs from ad"
+red_herrings:
+  - "memory rises only about 4%, so memory is not the signal"
+  - "Linux dashboard shows the whole Docker VM, not the ad container"

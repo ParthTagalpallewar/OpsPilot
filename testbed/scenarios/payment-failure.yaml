@@ -1,0 +1,22 @@
+# Scenario definition: Payment Failure
+id: payment-failure
+description: A share of payment charge calls fail, so checkout errors appear.
+fault_type: error_rate
+flag:
+  name: paymentFailure
+  variant: "50%"              # matches the ~47% failure rate seen in your logs (7 of 15); use "100%" for near-total failure
+  off_variant: "off"
+expected_failure_rate: 0.5     # the 50% variant has value 0.5
+duration_minutes: 10          # fault window; the guide suggests 10-15
+settle_minutes: 3             # wait with the flag off before and after
+load_generator: required
+affected_service: payment
+visible_in_services: [payment, checkout, frontend]
+expected_root_cause: "paymentFailure flag injects failures into the payment service charge call"
+expected_symptoms:
+  - "payment logs at level warn (not error): 'Payment request failed. Invalid token'"
+  - "error rate rises on payment, then on checkout and frontend"
+  - "failing payment span inside checkout traces in Jaeger"
+red_herrings:
+  - "loyalty_level=gold appears in the error text but gold orders also succeed"
+  - "failures are logged at warn, so an error-only log search finds nothing"

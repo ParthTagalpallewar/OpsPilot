@@ -1,0 +1,37 @@
+# Scenario definition: Memory leak in the Email service
+id: email-memory-leak
+description: Confirmation email bodies are padded, so memory grows and requests slow down.
+fault_type: resource_memory
+flag:
+  name: emailMemoryLeak
+  variant: "1000x"            # 10000x gives the strongest signal but probably OOM-kills the 100 MiB container
+  off_variant: "off"
+duration_minutes: 10
+settle_minutes: 3
+load_generator: required
+affected_service: email
+visible_in_services: [email, checkout]
+baseline:
+  memory_mib_avg: 61.6
+  request_duration_s: "0.003-0.02"
+observed_fault:
+  "1000x":
+    memory_mib_peak: 92.83
+    request_duration_s: "mostly 0.02-0.04"
+  "10000x":
+    memory_mib_peak: 92.83
+    request_duration_s: "0.21-0.44"
+    probable_oom_restarts: 2
+expected_root_cause: "emailMemoryLeak flag pads each confirmation email body in the email service"
+expected_symptoms:
+  - "email memory climbs toward the 100 MiB limit in a sawtooth pattern"
+  - "POST /send_order_confirmation durations rise (20-40x at 10000x)"
+  - "all requests still return 200, so no error logs"
+  - "possible abrupt restarts with no graceful-stop line (probable OOM)"
+red_herrings:
+  - "memory can drop between peaks, so it is not a straight line"
+  - "CPU stays at baseline"
+  - "docker inspect after a manual restart shows OOMKilled=false"
+cleanup:
+  - "set flag to off"
+  - "docker restart email"
