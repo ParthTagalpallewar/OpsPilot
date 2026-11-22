@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: opspilot-replay-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opspilot-replay
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: opspilot-replay
+  template:
+    metadata:
+      labels:
+        app: opspilot-replay
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: opspilot-replay:local
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /openapi.json
+              port: http
+          startupProbe:
+            httpGet:
+              path: /openapi.json
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        - name: worker
+          image: opspilot-replay:local
+          imagePullPolicy: Never
+          command:
+            - python
+            - -m
+            - opspilot.apps.worker.main
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: opspilot-replay-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opspilot-replay
+spec:
+  selector:
+    app: opspilot-replay
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

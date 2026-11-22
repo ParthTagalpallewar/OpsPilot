@@ -32,3 +32,40 @@ jobs:
 
       - name: Run tests
         run: uv run pytest
+
+      - name: Evaluate frozen scenarios
+        run: uv run opspilot eval
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compose:
+          - infra/docker/replay.compose.yml
+          - infra/docker/replay.compose.yml:infra/docker/shared.compose.yml
+    env:
+      COMPOSE_FILE: ${{ matrix.compose }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build and start API and worker
+        run: docker compose up --build --wait
+
+      - name: Verify queued replay over HTTP
+        run: python infra/docker/smoke_replay.py
+
+      - name: Verify PostgreSQL approval thread checkpoints
+        if: contains(matrix.compose, 'shared.compose.yml')
+        run: |
+          thread_count=$(docker compose exec -T postgres psql -U opspilot -d opspilot -Atc \
+            "SELECT count(DISTINCT thread_id) FROM checkpoints WHERE thread_id LIKE 'approval:%'")
+          test "$thread_count" = 2
+
+      - name: Show container logs
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop demo containers
+        if: always()
+        run: docker compose down --volumes

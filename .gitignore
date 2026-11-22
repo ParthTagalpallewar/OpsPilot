@@ -18,3 +18,5 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+# Local replay database
+/opspilot.sqlite3*

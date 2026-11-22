@@ -1,0 +1,39 @@
+{
+  "ad-high-cpu": {
+    "known_injected_cause": "adHighCpu feature flag",
+    "expected_leading_cause": {"kind": "feature_flag", "name": "adHighCpu"},
+    "service": "ad",
+    "expects_hypothesis": true,
+    "expected_records": [
+      {"source": "ad-stats-baseline.csv", "metric": "cpu_percent", "mean": 0.74},
+      {"source": "ad-stats-fault.csv", "metric": "cpu_percent", "mean": 398.0},
+      {"source": "ad-changes.csv", "name": "adHighCpu", "value": "on"},
+      {"source": "ad-cpu.md", "type": "runbook", "heading": "Investigate sustained Ad CPU"}
+    ]
+  },
+  "email-memory-leak": {
+    "known_injected_cause": "emailMemoryLeak feature flag",
+    "expected_leading_cause": {"kind": "feature_flag", "name": "emailMemoryLeak"},
+    "service": "email",
+    "expects_hypothesis": true,
+    "expected_records": [
+      {"source": "email-stats-baseline.csv", "metric": "mem_percent", "mean": 61.61},
+      {"source": "email-stats-fault.csv", "variant": "100x", "mean": 68.61},
+      {"source": "email-stats-fault.csv", "variant": "1000x", "mean": 85.99},
+      {"source": "email-stats-fault.csv", "variant": "10000x", "mean": 84.19},
+      {"source": "email-changes.csv", "name": "emailMemoryLeak", "value": "100x"},
+      {"source": "email-changes.csv", "name": "emailMemoryLeak", "value": "1000x"},
+      {"source": "email-changes.csv", "name": "emailMemoryLeak", "value": "10000x"},
+      {"source": "email-memory.md", "type": "runbook", "heading": "Investigate Email memory growth"}
+    ]
+  },
+  "payment-failure": {
+    "known_injected_cause": "paymentFailure feature flag",
+    "service": "payment",
+    "expects_hypothesis": false,
+    "expected_records": [
+      {"source": "payment-logs.jsonl", "severity": "warn", "count": 1},
+      {"source": "payment-failures.md", "type": "runbook", "heading": "Investigate Payment failures"}
+    ]
+  }
+}

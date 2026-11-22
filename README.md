@@ -4,7 +4,7 @@
 
 OpsPilot investigates production incidents the way an on-call engineer would: it reads logs, checks metrics and traces, correlates findings with recent deployments, searches runbooks, and reports ranked root-cause hypotheses, each backed by cited evidence. A human approves every remediation before anything runs.
 
-> **Status:** early development. The repository skeleton and design are in place; components are being built incrementally. See the [Roadmap](#roadmap) for progress.
+> **Status:** runnable local replay demo. The API, worker, and CLI share an evidence-first LangGraph workflow for three frozen scenarios. The local deployment uses SQLite. See [Getting started](#getting-started) for the Docker demo and [Roadmap](#roadmap) for the target architecture.
 
 ---
 
@@ -54,6 +54,17 @@ The core design rule: **the agent investigates real data and never invents a roo
 
 ## How it works
 
+In the runnable demo, FastAPI or the CLI selects a scenario and LangGraph
+builds a cited report. The API can queue a replay in SQLite or PostgreSQL.
+A separate worker processes the job, and clients can follow its progress over
+SSE. Reviewers can edit, reject, or approve a dry-run plan and retrieve the
+saved decision and preview.
+
+Follow the [portfolio demo](docs/portfolio-demo.md) for a reproducible
+walkthrough and resume bullets.
+
+### Target architecture
+
 ```
  Engineer/UI ──REST/SSE──┐        Alertmanager ──webhook──┐
                          ▼                                 ▼
@@ -98,7 +109,7 @@ START → triage → plan → ┬ logs ────┐
                                   validate (citations+schema) → report → interrupt(approval) → [later] execute
 ```
 
-For the full design, including the data model, caching, error handling, scaling, and trade-offs, see the [system design document](docs/system-design.md).
+For the full design, including the data model, caching, error handling, scaling, and trade-offs, see the workspace system design notes in `../systemDesign.txt`.
 
 ## Features
 
@@ -176,6 +187,25 @@ opspilot/
 
 ## Getting started
 
+### Replay a captured incident
+
+Run from the repository root after installing dependencies:
+
+```bash
+uv run opspilot replay ad-high-cpu
+uv run opspilot replay email-memory-leak
+uv run opspilot replay payment-failure
+```
+
+A LangGraph workflow routes each replay to its evidence collectors and validates
+report citations. The CLI returns a JSON report with cited evidence from captured Docker stats or
+Payment logs. Resource captures include baseline comparisons and documented flag
+change intervals. The Payment capture
+contains a single warning excerpt preserved from the scenario notes. Each replay
+can also cite a runbook section from `testbed/runbooks` as troubleshooting guidance.
+Read the [concept lessons](Concepts/README.md) and the
+[development log](progress/2026-11-22-shared-compose.md).
+
 ### Prerequisites
 
 - [uv](https://docs.astral.sh/uv/) (it installs the Python version pinned in `.python-version` for you)
@@ -198,20 +228,193 @@ cp .env.example .env
 uv run pytest
 ```
 
-### Running the services (planned)
+To retrieve a known failed Payment trace from a local Jaeger v3 API, run
+`uv run opspilot capture-payment-trace --url http://localhost:16686 --trace-id ID --output PATH`.
+Then run `uv run opspilot replay payment-failure --captures PATH`. You can also
+place a saved OTLP JSON export named `payment-traces.json` in that directory.
+The report cites Payment error spans and identifies their parent spans when the
+export includes them. A Payment log can be linked to its exact failed span
+by including both `trace_id` and `span_id` in the log record.
 
-These commands will work as the components land.
+For a historical report, add a UTC-offset cutoff such as
+`--as-of 2026-11-21T14:31:25Z`. The API accepts the same value as `as_of`.
+The replay computes its findings from evidence visible by that timestamp.
+
+### Enable hybrid runbook retrieval
 
 ```bash
-# Start Postgres + pgvector and Redis
-docker compose -f infra/docker/docker-compose.yml up -d
-
-# Start the API
-uv run uvicorn apps.api.main:app --reload
-
-# Start the agent worker
-uv run arq apps.worker.main.WorkerSettings
+uv sync --extra semantic
+OPSPILOT_RUNBOOK_SEARCH=hybrid uv run --extra semantic opspilot replay payment-failure
 ```
+
+The model is downloaded on first use. Vectors are computed locally and combined
+with keyword rankings. Use the same environment setting and installed extra on
+the worker to enable hybrid retrieval for queued investigations.
+
+To persist embeddings across runs, start the local pgvector database and set
+`OPSPILOT_VECTOR_DSN` to its PostgreSQL connection string while hybrid retrieval
+is enabled:
+
+```bash
+docker compose -f infra/docker/docker-compose.yml up -d postgres
+```
+
+New database volumes apply the vector schema at initialization. On an existing
+volume, apply the idempotent migration:
+
+```bash
+docker compose -f infra/docker/docker-compose.yml exec -T postgres \
+  sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  < infra/docker/postgres/init/02-runbook-vectors.sql
+```
+
+### Capture a Prometheus comparison
+
+Run `uv run opspilot capture-metrics --help` for arguments. Choose Ad or Email,
+a Prometheus base URL, a PromQL expression returning one percentage series, and
+four timestamps with UTC offsets for the baseline and incident windows. Write
+the result to a separate capture directory, then run
+`uv run opspilot replay ad-high-cpu --captures PATH` for an Ad capture. Use
+`email-memory-leak` for an Email capture.
+
+To add an OTLP JSON log export to that capture directory, run
+`uv run opspilot import-payment-logs EXPORT.json --output PATH`. The importer
+selects timestamped Payment warnings and errors with text bodies and preserves
+their trace and span IDs when present.
+
+### Request a Claude explanation
+
+Set `ANTHROPIC_API_KEY` and `OPSPILOT_CLAUDE_MODEL` in your shell, then run
+`uv run opspilot replay ad-high-cpu --with-claude`. This sends the demo's
+aggregate evidence and retrieved runbook section to the Claude Messages API.
+Run the standard replay command for an offline report.
+
+### Run the local replay API
+
+From the repository root, start the API with:
+
+```bash
+uv run uvicorn opspilot.apps.api.main:local_app --factory
+```
+
+Open `http://127.0.0.1:8000/docs` and submit a `POST /v1/incidents` with a
+`title` and `description`. For example, “Payment API returning 500” routes to
+the Payment replay. You can supply a `service` hint or choose an explicit
+`scenario` such as `ad-high-cpu`.
+Retrieve the saved report at `GET /v1/investigations/{investigation_id}`.
+If the report includes a plan, submit `plan_id`, `plan_hash`, and a decision to
+`POST /v1/investigations/{investigation_id}/approval`. Use `approve`, `reject`, or
+`edit`. For an edit, send replacement action text in `edits` and review the new
+plan returned by the API. Approval records a dry-run preview of the exact
+reviewed action and its evidence.
+
+The server uses `opspilot.sqlite3` by default. Set `OPSPILOT_DB` to change
+the database file or `OPSPILOT_CAPTURES` to change the capture directory.
+
+For asynchronous replay, include `"queued": true` in the incident request.
+The API returns HTTP 202 with a `Location` for checking progress. Start a worker
+from the same directory with the same database and capture settings:
+
+```bash
+uv run python -m opspilot.apps.worker.main
+```
+
+Use `--once` to process at most one job. Watch status transitions and completed
+LangGraph steps at
+`GET /v1/investigations/{investigation_id}/events`. Supply `Last-Event-ID` to
+resume from a previous event. Retrieve a cited record at
+`GET /v1/investigations/{investigation_id}/evidence/{evidence_id}`.
+
+### Run the packaged demo
+
+```bash
+docker compose -f infra/docker/replay.compose.yml up --build --wait
+python3 infra/docker/smoke_replay.py
+docker compose -f infra/docker/replay.compose.yml down
+```
+
+The API and worker share a named volume for the local investigation database.
+The API is available on loopback port 8000. Set `OPSPILOT_PORT` to use another port.
+
+### Run the PostgreSQL and Redis demo
+
+```bash
+export COMPOSE_FILE=infra/docker/replay.compose.yml:infra/docker/shared.compose.yml
+docker compose up --build --wait
+python3 infra/docker/smoke_replay.py
+docker compose down
+```
+
+The overlay runs PostgreSQL and Redis on the Compose network, publishes the
+API on loopback, and persists the investigation and graph checkpoint tables
+in a named PostgreSQL volume. It uses development credentials for local use.
+
+### Run on a local Kubernetes cluster
+
+Use a local cluster with a default StorageClass. Build the demo image and
+make it available to the cluster's node runtime. For a kind cluster:
+
+```bash
+docker build -t opspilot-replay:local .
+kind load docker-image opspilot-replay:local
+kubectl apply -k infra/kubernetes
+kubectl rollout status deployment/opspilot-replay
+kubectl port-forward service/opspilot-replay 8000:8000
+```
+
+In another terminal, run `python3 infra/docker/smoke_replay.py`. The API and
+worker run in one Pod and share the replay database on a persistent claim.
+
+### Queue a replay from Alertmanager
+
+Configure a webhook receiver for `POST /v1/webhooks/alertmanager`. Tag a demo
+alert rule with `opspilot_scenario` set to `ad-high-cpu`, `email-memory-leak`, or
+`payment-failure`. The webhook accepts firing alerts with one of those values,
+and the local worker processes the corresponding frozen captures. Repeat
+deliveries with the same fingerprint and start time reuse the investigation.
+
+### Configure authenticated API access
+
+Set `OPSPILOT_API_CREDENTIALS` to a JSON file containing a list of objects
+with `principal`, `role`, and `token`. Generate distinct tokens with
+`python3 -c 'import secrets; print(secrets.token_urlsafe(32))'` and keep the
+file outside the repository. Send tokens as `Authorization: Bearer TOKEN`.
+
+Operators submit incidents and read reports. Reviewers read reports and
+record plan decisions. Webhook credentials can only submit Alertmanager
+notifications. Use HTTPS for shared deployments. With no credentials file,
+the API is in local demo mode.
+
+### Use a shared PostgreSQL investigation store
+
+Start PostgreSQL and install the optional client:
+
+```bash
+docker compose -f infra/docker/docker-compose.yml up -d postgres
+uv sync --extra postgres
+```
+
+Set `OPSPILOT_DATABASE_DSN` to the database connection string in the shell
+for both processes. The app initializes its tables when it starts. Run the
+same API and worker commands above with `uv run --extra postgres`. If you also
+enable semantic retrieval, include `--extra semantic`. A PostgreSQL database
+starts with its own investigation history. Existing SQLite records remain
+in the original database file. PostgreSQL-backed workers also save LangGraph
+checkpoints and resume reclaimed replays at the next pending node.
+Each PostgreSQL-backed dry-run plan also waits on a durable approval interrupt.
+The approval decision resumes that thread and commits with the audit event.
+
+### Enable Redis worker notifications
+
+```bash
+docker compose -f infra/docker/docker-compose.yml up -d redis
+uv sync --extra redis
+```
+
+Set `OPSPILOT_REDIS_URL` in the API and worker shells and include
+`--extra redis` in their `uv run` commands. Keep any other enabled extras.
+The optional `OPSPILOT_REDIS_KEY` separates wake-up channels for deployments
+sharing a Redis database. Jobs and status events stay in the investigation database.
 
 ### Running the testbed (planned)
 
@@ -241,7 +444,27 @@ Never commit `.env`. It is listed in `.gitignore`.
 | `GET` | `/v1/evidence/{evidence_id}` | Raw evidence, so any claim in a report can be audited |
 | `POST` | `/v1/webhooks/alertmanager` | Map an Alertmanager alert to an incident |
 
+## Observe an investigation
+
+Set `OPSPILOT_TRACING=console` to print OpenTelemetry spans to stderr. To export
+over OTLP HTTP, set `OPSPILOT_TRACING=otlp` and
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to your collector's traces endpoint.
+Enable tracing on both the API and worker to see queue context propagation.
+
+To send evaluator observations to a Langfuse project, set
+`OPSPILOT_TRACING=langfuse`, `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, and
+`LANGFUSE_SECRET_KEY`, then run `uv run opspilot eval`. The terminal still
+receives the evaluation JSON. The exported observations contain aggregate
+checks and a reference dataset hash.
+
 ## Evaluation
+
+Run `uv run opspilot eval` from the repository root to check the frozen demo
+reports against the reference expectations. The command prints JSON with
+per-scenario results and returns exit status 1 when any scenario fails. Ad and
+Email also check that a unique leading hypothesis matches the recorded injected
+cause. Payment checks that the report withholds a hypothesis.
+
 
 OpsPilot has no real production incidents to learn from, so it makes its own:
 
@@ -267,9 +490,9 @@ OpsPilot has no real production incidents to learn from, so it makes its own:
 - [ ] Evidence tools: logs, metrics, traces, deployments
 - [ ] Runbook RAG with hybrid search
 - [ ] Testbed: fault injection and telemetry snapshots
-- [ ] LangGraph workflow with Postgres checkpointer
+- [x] LangGraph replay workflow with PostgreSQL checkpoint recovery
 - [ ] FastAPI service, job queue, and SSE streaming
-- [ ] Human approval flow and audit log
+- [x] Human approval, audit history, and PostgreSQL-backed interrupts
 - [ ] Evaluation harness and baseline scores
 - [ ] Langfuse tracing and OpenTelemetry instrumentation
 - [ ] Docker images, Kubernetes manifests, and CI

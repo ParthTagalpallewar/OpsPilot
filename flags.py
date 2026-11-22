@@ -3,6 +3,7 @@
 flagd reads this file (--uri file:./etc/flagd/demo.flagd.json) and reloads it
 when it changes, so editing the JSON is enough to flip a flag.
 """
+
 import json
 import os
 from pathlib import Path

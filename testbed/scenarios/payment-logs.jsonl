@@ -1,0 +1,1 @@
+{"service":"payment","severity":"warn","timestamp":"2026-11-21T19:33:33","message":"Payment request failed. Invalid token.","origin":"payment-failure.md"}

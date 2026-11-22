@@ -1,0 +1,46 @@
+# Overlay for replay.compose.yml. Uses development credentials on the Compose network.
+
+x-shared: &shared
+  image: opspilot-replay:shared
+  build:
+    args:
+      OPSPILOT_SHARED: "1"
+  environment:
+    OPSPILOT_DATABASE_DSN: postgresql://opspilot:opspilot_demo@postgres/opspilot
+    OPSPILOT_REDIS_URL: redis://redis:6379/0
+  volumes: !reset []
+
+services:
+  api:
+    <<: *shared
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  worker:
+    <<: *shared
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: opspilot
+      POSTGRES_PASSWORD: opspilot_demo
+      POSTGRES_DB: opspilot
+    volumes:
+      - shared_postgres:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "opspilot"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  shared_postgres:
