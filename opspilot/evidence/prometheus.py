@@ -114,6 +114,10 @@ def compare_windows(
     if max(time for time, _ in baseline[1]) >= min(time for time, _ in fault[1]):
         raise ValueError("The Prometheus sample windows overlap")
 
+    if metric == "payment_failure_percent" and any(
+        value > 100 for _, points in (baseline, fault) for _, value in points
+    ):
+        raise ValueError("Payment failure percentages cannot exceed 100")
     evidence = []
     for phase, (labels, points) in zip(
         ("baseline", "fault"), (baseline, fault), strict=True

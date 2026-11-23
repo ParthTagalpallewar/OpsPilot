@@ -34,7 +34,9 @@ jobs:
         run: uv run pytest
 
       - name: Evaluate frozen scenarios
-        run: uv run opspilot eval
+        run: |
+          uv run opspilot eval
+          uv run opspilot eval --ground-truth testbed/ground_truth/extended.json
 
   container-smoke:
     runs-on: ubuntu-latest

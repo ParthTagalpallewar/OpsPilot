@@ -9,3 +9,9 @@ Citation resolution tells you the reader can find the cited record. To assess wh
 ## Practice
 
 Copy `testbed/ground_truth/replay.json` to a temporary location and change the expected mean for the Ad fault window. Run `uv run opspilot eval --ground-truth PATH` with your copy. Find the failed check and the missing expected record. An automated build can use the nonzero exit status to detect that mismatch.
+
+## Test the boundaries
+
+The extended suite includes a healthy comparison, two equally timed candidate causes, a historical cutoff, and a captured Checkout-to-Payment incident. A healthy case tests false positives. A tie tests whether the agent preserves ambiguity. A cutoff tests look-ahead bias. The Checkout case checks measured failure counts and verifies each cited log-span pair by matching both identifiers.
+
+Run `uv run opspilot eval --ground-truth testbed/ground_truth/extended.json` to see the checks. The healthy and ambiguity fixtures are synthetic. The Checkout case uses measured testbed traffic, which still covers only one controlled incident.

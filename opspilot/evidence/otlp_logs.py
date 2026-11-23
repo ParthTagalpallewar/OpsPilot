@@ -49,16 +49,42 @@ class LogExport(BaseModel):
     resources: list[ResourceLogs] = Field(alias="resourceLogs")
 
 
-def import_payment_logs(source: Path, directory: Path) -> Path:
+class NoMatchingPaymentLogs(ValueError):
+    pass
+
+
+def import_payment_logs(
+    source: Path, directory: Path, *, trace_id: str | None = None
+) -> Path:
     with source.open("rb") as stream:
         content = stream.read(MAX_EXPORT_BYTES + 1)
     if len(content) > MAX_EXPORT_BYTES:
         raise ValueError("OTLP log export exceeded the capture limit")
+    rows = []
     try:
-        export = LogExport.model_validate_json(content)
+        if source.suffix == ".jsonl":
+            for line_number, line in enumerate(content.splitlines(), start=1):
+                if line.strip():
+                    export = LogExport.model_validate_json(line)
+                    rows.extend(
+                        normalize(export, f"{source.name}:{line_number}", trace_id)
+                    )
+        else:
+            export = LogExport.model_validate_json(content)
+            rows.extend(normalize(export, source.name, trace_id))
     except ValueError as exc:
         raise ValueError(f"{source}: invalid OTLP JSON log export") from exc
 
+    if not rows:
+        raise NoMatchingPaymentLogs(
+            "No matching timestamped Payment warnings or errors"
+        )
+    path = directory / "payment-logs.jsonl"
+    publish_snapshot(path, ("\n".join(rows) + "\n").encode())
+    return path
+
+
+def normalize(export: LogExport, origin: str, trace_id: str | None) -> list[str]:
     rows = []
     for resource_index, resource in enumerate(export.resources):
         if not any(
@@ -73,7 +99,8 @@ def import_payment_logs(source: Path, directory: Path) -> Path:
                 message = log.body.get("stringValue")
                 timestamp = log.time or log.observed
                 if (
-                    severity not in FAILURE_SEVERITIES
+                    (trace_id is not None and log.trace_id.lower() != trace_id)
+                    or severity not in FAILURE_SEVERITIES
                     or not isinstance(message, str)
                     or not message.strip()
                     or not timestamp
@@ -87,7 +114,7 @@ def import_payment_logs(source: Path, directory: Path) -> Path:
                     ).isoformat(),
                     "message": message.strip(),
                     "origin": (
-                        f"{source.name}#/resourceLogs/{resource_index}"
+                        f"{origin}#/resourceLogs/{resource_index}"
                         f"/scopeLogs/{scope_index}/logRecords/{log_index}"
                     ),
                 }
@@ -99,8 +126,4 @@ def import_payment_logs(source: Path, directory: Path) -> Path:
                         row[field] = value.lower()
                 rows.append(json.dumps(row))
 
-    if not rows:
-        raise ValueError("No timestamped Payment warnings or errors with text bodies")
-    path = directory / "payment-logs.jsonl"
-    publish_snapshot(path, ("\n".join(rows) + "\n").encode())
-    return path
+    return rows

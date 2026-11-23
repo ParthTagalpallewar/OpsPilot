@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, Field
 
+from opspilot.evidence.traces import valid_trace_id
 from opspilot.investigations import InvestigationStore
 from opspilot.replay import SCENARIOS
 
@@ -21,14 +22,33 @@ class Notification(BaseModel):
     alerts: list[Alert]
 
 
-def enqueue_alerts(notification: Notification, store: InvestigationStore) -> dict:
+def enqueue_alerts(
+    notification: Notification,
+    store: InvestigationStore,
+    live_scenarios: frozenset[str] = frozenset(),
+) -> dict:
     investigations = {}
     ignored = 0
     for alert in notification.alerts:
         scenario = alert.labels.get("opspilot_scenario")
-        if alert.status != "firing" or scenario not in SCENARIOS:
+        mode = alert.labels.get("opspilot_mode", "replay")
+        live = mode == "live"
+        if (
+            alert.status != "firing"
+            or scenario not in SCENARIOS
+            or mode not in {"live", "replay"}
+            or (live and scenario not in live_scenarios)
+        ):
             ignored += 1
             continue
+        trace_id = None
+        if live and scenario == "payment-failure":
+            trace_id = alert.annotations.get("opspilot_trace_id")
+            if trace_id is not None:
+                trace_id = trace_id.strip().lower()
+            if trace_id is not None and not valid_trace_id(trace_id):
+                ignored += 1
+                continue
         started = alert.starts_at.astimezone(UTC).isoformat()
         occurrence = f"{alert.fingerprint.lower()}:{started}"
         title = alert.labels.get("alertname", "").strip() or "Alertmanager alert"
@@ -43,6 +63,8 @@ def enqueue_alerts(notification: Notification, store: InvestigationStore) -> dic
             description[:10_000],
             queued=True,
             alert_occurrence=occurrence,
+            live_alert_at=started if live else None,
+            live_trace_id=trace_id,
         )
         investigation_id = document["investigation_id"]
         investigations[investigation_id] = {

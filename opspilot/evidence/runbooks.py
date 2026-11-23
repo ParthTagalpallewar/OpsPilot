@@ -43,18 +43,36 @@ def keyword_order(chunks: list[tuple], query: str) -> list[int]:
     return [row_id - 1 for (row_id,) in matches]
 
 
-def retrieve_runbooks(directory: Path, service: str, symptom: str) -> list[dict]:
+def retrieve_runbooks(
+    directory: Path,
+    service: str,
+    symptom: str,
+    *,
+    issues: list[dict[str, str]] | None = None,
+) -> list[dict]:
+    if issues is None:
+        issues = []
     terms = sorted(set(WORD.findall(symptom.lower())) - {service})
     if WORD.fullmatch(service) is None or not terms:
         return []
     query = f'"{service}" AND (' + " OR ".join(f'"{term}"' for term in terms) + ")"
-    chunks = [
-        chunk for file in sorted(directory.glob("*.md")) for chunk in sections(file)
-    ]
+    chunks = []
+    for file in sorted(directory.glob("*.md")):
+        try:
+            chunks.extend(list(sections(file)))
+        except (OSError, UnicodeError):
+            issues.append({"source": file.name, "reason": "unreadable"})
     if not chunks:
         return []
 
-    keywords = keyword_order(chunks, query)
+    keyword_failed = False
+    try:
+        keywords = keyword_order(chunks, query)
+    except sqlite3.Error:
+        keywords = []
+        keyword_failed = True
+        issues.append({"source": "runbook_keyword", "reason": "unavailable"})
+    semantic_failed = False
     semantic = []
     hybrid = os.environ.get("OPSPILOT_RUNBOOK_SEARCH") == "hybrid"
     vector_dsn = os.environ.get("OPSPILOT_VECTOR_DSN") if hybrid else None
@@ -67,12 +85,16 @@ def retrieve_runbooks(directory: Path, service: str, symptom: str) -> list[dict]
         if candidates:
             indexes, passages = zip(*candidates, strict=True)
             semantic_query = f"{service}: {symptom}"
-            ranked = (
-                pgvector_order(vector_dsn, semantic_query, passages)
-                if vector_dsn
-                else semantic_order(semantic_query, passages)
-            )
-            semantic = [indexes[index] for index in ranked]
+            try:
+                ranked = (
+                    pgvector_order(vector_dsn, semantic_query, passages)
+                    if vector_dsn
+                    else semantic_order(semantic_query, passages)
+                )
+                semantic = [indexes[index] for index in ranked]
+            except (OSError, RuntimeError, ValueError):
+                semantic_failed = True
+                issues.append({"source": "runbook_semantic", "reason": "unavailable"})
 
     scores = defaultdict(float)
     for ranking in (keywords, semantic):
@@ -102,7 +124,13 @@ def retrieve_runbooks(directory: Path, service: str, symptom: str) -> list[dict]
     }
     if hybrid:
         record["retrieval"] = {
-            "mode": "hybrid",
+            "mode": (
+                "keyword_fallback"
+                if semantic_failed
+                else "semantic_fallback"
+                if keyword_failed
+                else "hybrid"
+            ),
             "model": MODEL_NAME,
             "vector_store": "pgvector" if vector_dsn else "memory",
             "semantic_query": f"{service}: {symptom}",

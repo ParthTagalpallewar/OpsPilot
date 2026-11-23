@@ -8,7 +8,11 @@ CHANGE_FIELDS = ("kind", "name", "value", "earliest", "latest", "origin")
 
 
 def read_changes(
-    path: Path, service: str, *, as_of: datetime | None = None
+    path: Path,
+    service: str,
+    *,
+    as_of: datetime | None = None,
+    id_prefix: str = "change",
 ) -> list[dict]:
     try:
         stream = path.open(encoding="utf-8", newline="")
@@ -41,7 +45,7 @@ def read_changes(
             evidence.append(
                 {
                     **event,
-                    "id": f"ev_change_{service}_{rows.line_num}",
+                    "id": f"ev_{id_prefix}_{service}_{rows.line_num}",
                     "type": "change_event",
                     "service": service,
                     "source": path.name,
@@ -62,11 +66,18 @@ def correlate_changes(windows: list[dict], changes: list[dict]) -> list[dict]:
             earliest = datetime.fromisoformat(change["earliest"])
             latest = datetime.fromisoformat(change["latest"])
             if end <= earliest <= latest <= start:
+                subject = (
+                    f"Rollout activity for {change['name']} ({change['value']})"
+                    if change["kind"] == "deployment"
+                    else (
+                        f"The documented interval for {change['name']} changing to "
+                        f"{change['value']}"
+                    )
+                )
                 observations.append(
                     {
                         "statement": (
-                            f"The documented interval for {change['name']} changing to "
-                            f"{change['value']} falls between the last reading of "
+                            f"{subject} falls between the last reading of "
                             f"{before['phase']} ({before['variant']}) and the first "
                             f"reading of {after['phase']} ({after['variant']})."
                         ),

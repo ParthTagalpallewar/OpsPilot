@@ -39,3 +39,23 @@ def test_rank_fusion_prefers_agreement(tmp_path, monkeypatch):
     assert record["heading"] == "Payment charge review"
     assert record["retrieval"]["keyword_rank"] == 2
     assert record["retrieval"]["semantic_rank"] == 2
+
+
+def test_vector_failure_preserves_report_and_keyword_guidance(monkeypatch):
+    from opspilot.replay import investigate
+
+    monkeypatch.setenv("OPSPILOT_RUNBOOK_SEARCH", "hybrid")
+    monkeypatch.setenv("OPSPILOT_VECTOR_DSN", "postgresql://unused")
+    with patch("opspilot.evidence.runbooks.pgvector_order", side_effect=ValueError):
+        captures = RUNBOOKS.parent / "scenarios"
+        report = investigate("ad-high-cpu", captures)
+
+    assert report["coverage"] == "partial"
+    assert report["source_issues"] == [
+        {"source": "runbook_semantic", "reason": "unavailable"}
+    ]
+    assert report["hypothesis"]["cause"]["name"] == "adHighCpu"
+    (runbook,) = [item for item in report["evidence"] if item.get("type") == "runbook"]
+    assert runbook["heading"] == "Investigate sustained Ad CPU"
+    assert runbook["retrieval"]["mode"] == "keyword_fallback"
+    assert report["guidance"][0]["evidence_ids"] == [runbook["id"]]

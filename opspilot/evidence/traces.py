@@ -1,10 +1,12 @@
 """Extract failed spans and observed parent links from saved OTLP JSON."""
 
+import json
 import re
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.error import HTTPError
+from urllib.parse import urlencode, urlsplit
 from urllib.request import urlopen
 
 from pydantic import AliasChoices, AliasPath, BaseModel, Field
@@ -62,9 +64,11 @@ def read_failed_spans(
     return extract_failed_spans(raw, path, service, as_of=as_of)
 
 
-def capture_payment_trace(base_url: str, trace_id: str, directory: Path) -> Path:
-    if not re.fullmatch(r"[0-9a-fA-F]{32}", trace_id) or int(trace_id, 16) == 0:
-        raise ValueError("Use a nonzero 32-character hexadecimal Jaeger trace ID")
+def valid_trace_id(trace_id: str) -> bool:
+    return bool(re.fullmatch(r"[0-9a-fA-F]{32}", trace_id)) and int(trace_id, 16) != 0
+
+
+def read_jaeger(base_url: str, route: str) -> bytes:
     endpoint = urlsplit(base_url)
     if (
         endpoint.scheme not in {"http", "https"}
@@ -74,14 +78,54 @@ def capture_payment_trace(base_url: str, trace_id: str, directory: Path) -> Path
         or endpoint.fragment
     ):
         raise ValueError("Use a Jaeger HTTP(S) base URL without credentials or query")
-    trace_id = trace_id.lower()
-    with urlopen(
-        f"{base_url.rstrip('/')}/api/v3/traces/{trace_id}", timeout=15
-    ) as response:
+    with urlopen(f"{base_url.rstrip('/')}/api/v3/{route}", timeout=15) as response:
         raw = response.read(MAX_TRACE_BYTES + 1)
     if len(raw) > MAX_TRACE_BYTES:
         raise ValueError("Jaeger response exceeded the trace capture limit")
+    return raw
 
+
+def discover_payment_trace(
+    base_url: str, alert_time: datetime, path: Path
+) -> str | None:
+    start = alert_time - timedelta(minutes=10)
+    query = urlencode(
+        {
+            "query.serviceName": "payment",
+            "query.startTimeMin": start.isoformat(),
+            "query.startTimeMax": alert_time.isoformat(),
+            "query.searchDepth": 20,
+        }
+    )
+    try:
+        raw = read_jaeger(base_url, f"traces?{query}")
+    except HTTPError as exc:
+        if exc.code != 404:
+            raise
+        with exc:
+            try:
+                details = json.loads(exc.read(4096))
+            except ValueError:
+                raise exc from None
+        if details == {"error": {"httpCode": 404, "message": "No traces found"}}:
+            return None
+        raise
+    candidates = set()
+    for chunk in raw.splitlines():
+        if not chunk.strip():
+            continue
+        spans = extract_failed_spans(
+            chunk, path, "payment", as_of=alert_time, started_after=start
+        )
+        candidates.update(span["trace_id"] for span in spans)
+    return min(candidates, default=None)
+
+
+def capture_payment_trace(base_url: str, trace_id: str, directory: Path) -> Path:
+    if not valid_trace_id(trace_id):
+        raise ValueError("Use a nonzero 32-character hexadecimal Jaeger trace ID")
+    trace_id = trace_id.lower()
+    raw = read_jaeger(base_url, f"traces/{trace_id}")
     path = directory / "payment-traces.json"
     spans = extract_failed_spans(raw, path, "payment")
     if not spans or any(span["trace_id"] != trace_id for span in spans):
@@ -90,20 +134,28 @@ def capture_payment_trace(base_url: str, trace_id: str, directory: Path) -> Path
     return path
 
 
+def epoch_nanoseconds(value: datetime) -> int:
+    elapsed = value - datetime(1970, 1, 1, tzinfo=UTC)
+    return (
+        elapsed.days * 86400 + elapsed.seconds
+    ) * 1_000_000_000 + elapsed.microseconds * 1000
+
+
 def extract_failed_spans(
-    raw: bytes, path: Path, service: str, *, as_of: datetime | None = None
+    raw: bytes,
+    path: Path,
+    service: str,
+    *,
+    as_of: datetime | None = None,
+    started_after: datetime | None = None,
 ) -> list[dict]:
     try:
         export = TraceExport.model_validate_json(raw)
     except ValueError as exc:
         raise ValueError(f"{path}: invalid OTLP JSON trace export") from exc
 
-    cutoff_ns = None
-    if as_of is not None:
-        elapsed = as_of - datetime(1970, 1, 1, tzinfo=UTC)
-        cutoff_ns = (
-            elapsed.days * 86400 + elapsed.seconds
-        ) * 1_000_000_000 + elapsed.microseconds * 1000
+    cutoff_ns = epoch_nanoseconds(as_of) if as_of is not None else None
+    start_ns = epoch_nanoseconds(started_after) if started_after is not None else None
     spans = {}
     for resource in export.resources:
         name = next(
@@ -127,6 +179,8 @@ def extract_failed_spans(
     for (trace_id, span_id), (name, span) in sorted(spans.items()):
         if name != service or span.status.code not in (2, "STATUS_CODE_ERROR"):
             continue
+        if start_ns is not None and span.start < start_ns:
+            continue
         parent_id = span.parent_id.lower()
         parent = spans.get((trace_id, parent_id))
         evidence.append(
@@ -141,6 +195,7 @@ def extract_failed_spans(
                 "duration_ms": (span.end - span.start) / 1_000_000,
                 "parent_span_id": parent_id or None,
                 "parent_service": parent[0] if parent else None,
+                "parent_operation": parent[1].name if parent else None,
             }
         )
     return evidence

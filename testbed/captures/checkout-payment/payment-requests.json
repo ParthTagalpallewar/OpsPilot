@@ -1,0 +1,25 @@
+{
+  "target_service": "checkout",
+  "windows": [
+    {
+      "phase": "baseline",
+      "start": "2026-11-23T02:19:05.903Z",
+      "end": "2026-11-23T02:19:06.331Z",
+      "total": 6,
+      "failed": 0,
+      "statuses": {
+        "ok": 6
+      }
+    },
+    {
+      "phase": "fault",
+      "start": "2026-11-23T02:19:21.350Z",
+      "end": "2026-11-23T02:19:21.502Z",
+      "total": 6,
+      "failed": 6,
+      "statuses": {
+        "13": 6
+      }
+    }
+  ]
+}

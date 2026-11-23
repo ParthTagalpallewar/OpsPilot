@@ -20,3 +20,6 @@ build/
 *.egg-info/
 # Local replay database
 /opspilot.sqlite3*
+
+# Captured live investigations
+/live-captures/

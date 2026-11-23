@@ -1,0 +1,316 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "checkout"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "a6c9c958155768101c12515f723268f6",
+              "spanId": "57d3541cbb1007fd",
+              "parentSpanId": "86b251294d9de302",
+              "name": "oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361425453458",
+              "endTimeUnixNano": "1795400361453620875",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "a6c9c958155768101c12515f723268f6",
+              "spanId": "86b251294d9de302",
+              "parentSpanId": "b12ac78dbb926380",
+              "name": "oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361379633583",
+              "endTimeUnixNano": "1795400361453689750",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "bb8ae0eb7cb17ef419a833bdcc4feb52",
+              "spanId": "5a90d64bb21fcd84",
+              "parentSpanId": "942000f77e11f2d2",
+              "name": "oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361463827833",
+              "endTimeUnixNano": "1795400361465396958",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "bb8ae0eb7cb17ef419a833bdcc4feb52",
+              "spanId": "942000f77e11f2d2",
+              "parentSpanId": "73351c22bd323153",
+              "name": "oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361457472750",
+              "endTimeUnixNano": "1795400361465410458",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "75c1cfaf2b439cc5ee54ad61dd807631",
+              "spanId": "465f7ffa8809ed23",
+              "parentSpanId": "f2f14ad28352a4f9",
+              "name": "oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361472749333",
+              "endTimeUnixNano": "1795400361473945583",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "75c1cfaf2b439cc5ee54ad61dd807631",
+              "spanId": "f2f14ad28352a4f9",
+              "parentSpanId": "9e0f83b53c60537b",
+              "name": "oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361467909292",
+              "endTimeUnixNano": "1795400361473961792",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "cb9dc8f69208023ccac38f26ff8ae74e",
+              "spanId": "4270add0d11efc51",
+              "parentSpanId": "8493675ddb31c994",
+              "name": "oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361483921375",
+              "endTimeUnixNano": "1795400361485238791",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "cb9dc8f69208023ccac38f26ff8ae74e",
+              "spanId": "8493675ddb31c994",
+              "parentSpanId": "f776fc0c479f016a",
+              "name": "oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361477029917",
+              "endTimeUnixNano": "1795400361485255417",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "723ce87394715263fc2dca34c1a5df53",
+              "spanId": "6d6a6d681583d291",
+              "parentSpanId": "bc86960259555a01",
+              "name": "oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361492756875",
+              "endTimeUnixNano": "1795400361494005500",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "723ce87394715263fc2dca34c1a5df53",
+              "spanId": "bc86960259555a01",
+              "parentSpanId": "9c1e08f9d7c9b027",
+              "name": "oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361488126542",
+              "endTimeUnixNano": "1795400361494023125",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "4cbc0ef7343337b6ebd89326ed850864",
+              "spanId": "1fa8296217600d6b",
+              "parentSpanId": "5c55760b80c40ee9",
+              "name": "oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361501002917",
+              "endTimeUnixNano": "1795400361501979292",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "4cbc0ef7343337b6ebd89326ed850864",
+              "spanId": "5c55760b80c40ee9",
+              "parentSpanId": "94f9e9b2a3885e56",
+              "name": "oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361497086875",
+              "endTimeUnixNano": "1795400361501991958",
+              "status": {
+                "code": 2
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "checkout-capture-client"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "a6c9c958155768101c12515f723268f6",
+              "spanId": "b12ac78dbb926380",
+              "name": "grpc.oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361375000000",
+              "endTimeUnixNano": "1795400361454277917",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "bb8ae0eb7cb17ef419a833bdcc4feb52",
+              "spanId": "73351c22bd323153",
+              "name": "grpc.oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361457000000",
+              "endTimeUnixNano": "1795400361465713916",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "75c1cfaf2b439cc5ee54ad61dd807631",
+              "spanId": "9e0f83b53c60537b",
+              "name": "grpc.oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361467000000",
+              "endTimeUnixNano": "1795400361473853166",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "cb9dc8f69208023ccac38f26ff8ae74e",
+              "spanId": "f776fc0c479f016a",
+              "name": "grpc.oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361476000000",
+              "endTimeUnixNano": "1795400361485266709",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "723ce87394715263fc2dca34c1a5df53",
+              "spanId": "9c1e08f9d7c9b027",
+              "name": "grpc.oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361487000000",
+              "endTimeUnixNano": "1795400361494036166",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "4cbc0ef7343337b6ebd89326ed850864",
+              "spanId": "94f9e9b2a3885e56",
+              "name": "grpc.oteldemo.CheckoutService/PlaceOrder",
+              "startTimeUnixNano": "1795400361496000000",
+              "endTimeUnixNano": "1795400361501381500",
+              "status": {
+                "code": 2
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "payment"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "a6c9c958155768101c12515f723268f6",
+              "spanId": "1bbc14ee27497fdd",
+              "parentSpanId": "57d3541cbb1007fd",
+              "name": "grpc.oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361430000000",
+              "endTimeUnixNano": "1795400361452148584",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "bb8ae0eb7cb17ef419a833bdcc4feb52",
+              "spanId": "3881699ed0a06f8a",
+              "parentSpanId": "5a90d64bb21fcd84",
+              "name": "grpc.oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361464000000",
+              "endTimeUnixNano": "1795400361464660625",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "75c1cfaf2b439cc5ee54ad61dd807631",
+              "spanId": "a6c95b7801bab7ba",
+              "parentSpanId": "465f7ffa8809ed23",
+              "name": "grpc.oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361473000000",
+              "endTimeUnixNano": "1795400361473500709",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "cb9dc8f69208023ccac38f26ff8ae74e",
+              "spanId": "4c6600a1fb1f284d",
+              "parentSpanId": "4270add0d11efc51",
+              "name": "grpc.oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361484000000",
+              "endTimeUnixNano": "1795400361484580084",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "723ce87394715263fc2dca34c1a5df53",
+              "spanId": "778842fbb8f1e750",
+              "parentSpanId": "6d6a6d681583d291",
+              "name": "grpc.oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361493000000",
+              "endTimeUnixNano": "1795400361493642542",
+              "status": {
+                "code": 2
+              }
+            },
+            {
+              "traceId": "4cbc0ef7343337b6ebd89326ed850864",
+              "spanId": "d763dd04be9f402f",
+              "parentSpanId": "1fa8296217600d6b",
+              "name": "grpc.oteldemo.PaymentService/Charge",
+              "startTimeUnixNano": "1795400361501000000",
+              "endTimeUnixNano": "1795400361501394375",
+              "status": {
+                "code": 2
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

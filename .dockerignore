@@ -6,3 +6,5 @@
 .ruff_cache
 opspilot.sqlite3*
 dist
+
+live-captures

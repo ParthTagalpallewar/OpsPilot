@@ -5,14 +5,17 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from sqlite3 import Connection
-from time import time
+from time import monotonic, time
 from uuid import uuid4
 
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from opspilot.approval_graph import pause_review, resolve_review
-from opspilot.approvals import ApprovalConflict, make_plan
+from opspilot.approvals import PLAN_TTL, ApprovalConflict, make_plan
 from opspilot.checkpoints import setup_checkpoints
+from opspilot.live_metrics import LiveMetrics
+from opspilot.live_traces import LivePaymentTraces
+from opspilot.operational_metrics import review_wait, worker_duration, worker_outcomes
 from opspilot.replay import SCENARIOS, investigate
 from opspilot.storage import InvestigationDatabase, PostgresConnection
 from opspilot.telemetry import tracer
@@ -28,10 +31,14 @@ class InvestigationStore:
         *,
         on_enqueue: Callable[[], None] | None = None,
         checkpoint_replay: bool = False,
+        live_metrics: LiveMetrics | None = None,
+        live_traces: LivePaymentTraces | None = None,
     ):
         self.database = InvestigationDatabase(database)
         self.captures = captures
         self.on_enqueue = on_enqueue
+        self.live_metrics = live_metrics
+        self.live_traces = live_traces
         self.checkpoint_dsn = (
             database if checkpoint_replay and isinstance(database, str) else None
         )
@@ -152,6 +159,8 @@ class InvestigationStore:
         queued: bool = False,
         as_of: datetime | None = None,
         alert_occurrence: str | None = None,
+        live_alert_at: str | None = None,
+        live_trace_id: str | None = None,
     ) -> dict:
         if scenario not in SCENARIOS:
             raise ValueError(f"Unknown replay scenario: {scenario}")
@@ -168,6 +177,14 @@ class InvestigationStore:
             "status": "queued",
             "report": None,
         }
+        if live_alert_at is not None:
+            if not queued or alert_occurrence is None:
+                raise ValueError("Live capture requires a queued alert occurrence")
+            document["live_alert_at"] = live_alert_at
+            document["capture_mode"] = "live_metrics"
+            if scenario == "payment-failure":
+                document["live_trace_id"] = live_trace_id
+                document["capture_mode"] = "live_trace"
         if as_of is not None:
             if as_of.utcoffset() is None:
                 raise ValueError("Replay cutoff requires a UTC offset")
@@ -241,6 +258,14 @@ class InvestigationStore:
                 (datetime.now(UTC).isoformat(), step, investigation_id, token),
             )
 
+    def queue_depth(self) -> int:
+        with self.database.session() as connection:
+            return connection.execute(
+                "SELECT count(*) FROM replay_jobs "
+                "WHERE lease_until IS NULL OR lease_until <= ?",
+                (time(),),
+            ).fetchone()[0]
+
     def process_next(self) -> bool:
         token = str(uuid4())
         with self.database.session(write=True) as connection:
@@ -268,6 +293,7 @@ class InvestigationStore:
             self._save(connection, document)
             self._record_status(connection, document)
 
+        started = monotonic()
         with tracer.start_as_current_span(
             "opspilot.worker.run",
             context=propagator.extract(json.loads(carrier[0]) if carrier else {}),
@@ -276,9 +302,30 @@ class InvestigationStore:
             set_status_on_exception=False,
         ) as span:
             try:
+                captures = self.captures
+                if document.get("capture_mode") == "live_trace":
+                    if self.live_traces is None:
+                        raise ValueError("Live traces are not configured on the worker")
+                    captures = self.live_traces.collect(
+                        investigation_id,
+                        document["live_trace_id"],
+                        datetime.fromisoformat(document["live_alert_at"]),
+                    )
+                    self._record_step(investigation_id, token, "capture_jaeger")
+                elif "live_alert_at" in document:
+                    if self.live_metrics is None:
+                        raise ValueError(
+                            "Live metrics are not configured on the worker"
+                        )
+                    captures = self.live_metrics.collect(
+                        investigation_id,
+                        scenario,
+                        datetime.fromisoformat(document["live_alert_at"]),
+                    )
+                    self._record_step(investigation_id, token, "capture_prometheus")
                 report = investigate(
                     scenario,
-                    self.captures,
+                    captures,
                     as_of=datetime.fromisoformat(document["as_of"])
                     if "as_of" in document
                     else None,
@@ -292,7 +339,14 @@ class InvestigationStore:
                 self._complete(document, report)
             except (OSError, ValueError):
                 document.update(
-                    status="failed", error="Replay telemetry is unavailable"
+                    status="failed",
+                    error=(
+                        "Live Jaeger telemetry is unavailable"
+                        if document.get("capture_mode") == "live_trace"
+                        else "Live Prometheus telemetry is unavailable"
+                        if "live_alert_at" in document
+                        else "Replay telemetry is unavailable"
+                    ),
                 )
             span.set_attribute("opspilot.outcome", document["status"])
 
@@ -311,6 +365,11 @@ class InvestigationStore:
                     pause_review(connection, document["plan"])
                 self._save(connection, document)
                 self._record_status(connection, document)
+        if matched:
+            outcome = document["status"]
+            attributes = {"opspilot.outcome": outcome}
+            worker_duration.record(monotonic() - started, attributes)
+            worker_outcomes.add(1, attributes)
         return True
 
     def get(self, investigation_id: str) -> dict | None:
@@ -395,4 +454,9 @@ class InvestigationStore:
                 "INSERT INTO approval_events VALUES (?, ?, ?)",
                 (investigation_id, len(history) + 1, json.dumps(event)),
             )
-            return self._load(connection, investigation_id)
+            result = self._load(connection, investigation_id)
+        offered_at = datetime.fromisoformat(plan["expires_at"]) - PLAN_TTL
+        review_wait.record(
+            max(0, (now - offered_at).total_seconds()), {"opspilot.decision": decision}
+        )
+        return result

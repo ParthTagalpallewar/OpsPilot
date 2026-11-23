@@ -6,7 +6,9 @@ from pathlib import Path
 from opspilot.evaluation import evaluate_replay
 from opspilot.evidence.otlp_logs import import_payment_logs
 from opspilot.evidence.prometheus import capture_comparison
+from opspilot.evidence.rollouts import import_rollouts
 from opspilot.evidence.traces import capture_payment_trace
+from opspilot.operational_metrics import configure_metrics
 from opspilot.replay import METRIC_SCENARIOS, SCENARIOS, investigate
 from opspilot.telemetry import configure_tracing
 
@@ -53,6 +55,14 @@ def main():
     )
     import_logs.add_argument("source", type=Path)
     import_logs.add_argument("--output", required=True, type=Path)
+    rollout = commands.add_parser(
+        "import-rollouts", help="Freeze Deployment-owned Kubernetes ReplicaSets."
+    )
+    rollout.add_argument("scenario", choices=METRIC_SCENARIOS)
+    rollout.add_argument("source", type=Path)
+    rollout.add_argument("--namespace", required=True)
+    rollout.add_argument("--deployment", required=True)
+    rollout.add_argument("--output", required=True, type=Path)
     for command in (replay, evaluate):
         command.add_argument(
             "--captures",
@@ -66,6 +76,7 @@ def main():
         return
     try:
         configure_tracing()
+        configure_metrics("cli")
         if args.command == "capture-metrics":
             service, _, _ = METRIC_SCENARIOS[args.scenario]
             path = args.output / f"{service}-prometheus.json"
@@ -77,6 +88,16 @@ def main():
         elif args.command == "import-payment-logs":
             path = import_payment_logs(args.source, args.output)
             report = {"capture": str(path), "scenario": "payment-failure"}
+        elif args.command == "import-rollouts":
+            service, _, _ = METRIC_SCENARIOS[args.scenario]
+            path = import_rollouts(
+                args.source,
+                args.output,
+                namespace=args.namespace,
+                deployment=args.deployment,
+                service=service,
+            )
+            report = {"capture": str(path), "scenario": args.scenario}
         elif args.command == "eval":
             report = evaluate_replay(args.captures, args.ground_truth)
         else:

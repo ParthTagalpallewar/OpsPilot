@@ -1,0 +1,50 @@
+{
+  "ad-healthy": {
+    "scenario": "ad-high-cpu",
+    "capture_dir": "../captures/ad-healthy",
+    "service": "ad",
+    "expects_hypothesis": false,
+    "expected_records": [
+      {"phase": "baseline", "mean": 3.0},
+      {"phase": "fault", "mean": 3.0}
+    ]
+  },
+  "ad-ambiguous": {
+    "scenario": "ad-high-cpu",
+    "capture_dir": "../captures/ad-ambiguous",
+    "service": "ad",
+    "expects_hypothesis": true,
+    "expected_top_causes": [
+      {"kind": "feature_flag", "name": "adHighCpu"},
+      {"kind": "deployment", "name": "ad-release-v2"}
+    ],
+    "expected_records": [
+      {"phase": "baseline", "mean": 3.0},
+      {"phase": "fault", "mean": 90.0},
+      {"kind": "feature_flag", "name": "adHighCpu"},
+      {"kind": "deployment", "name": "ad-release-v2"}
+    ]
+  },
+  "ad-before-onset": {
+    "scenario": "ad-high-cpu",
+    "as_of": "2026-11-21T14:30:19Z",
+    "service": "ad",
+    "expects_hypothesis": false,
+    "expected_claims": 0,
+    "forbidden_records": [{"phase": "fault"}, {"type": "change_event"}],
+    "expected_records": []
+  },
+  "checkout-payment": {
+    "scenario": "payment-failure",
+    "capture_dir": "../captures/checkout-payment",
+    "service": "payment",
+    "expects_hypothesis": false,
+    "expected_log_span_links": 6,
+    "expected_records": [
+      {"type": "request_counts", "target_service": "checkout", "phase": "baseline", "failed": 0, "total": 6},
+      {"type": "request_counts", "target_service": "checkout", "phase": "fault", "failed": 6, "total": 6},
+      {"type": "log_cluster", "count": 6},
+      {"type": "trace_error", "parent_service": "checkout"}
+    ]
+  }
+}

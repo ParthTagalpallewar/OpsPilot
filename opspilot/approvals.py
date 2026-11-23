@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 from hashlib import sha256
 from uuid import uuid4
 
+PLAN_TTL = timedelta(hours=1)
+
 
 class ApprovalConflict(ValueError):
     pass
@@ -16,7 +18,7 @@ def make_plan(action: str, evidence_ids: list[str], now: datetime) -> dict:
         "action": action,
         "evidence_ids": evidence_ids,
         "mode": "dry_run",
-        "expires_at": (now + timedelta(hours=1)).isoformat(),
+        "expires_at": (now + PLAN_TTL).isoformat(),
     }
     digest = sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
     return {**plan, "plan_hash": digest}

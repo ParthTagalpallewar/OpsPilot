@@ -15,6 +15,9 @@ from opspilot.apps.api.alertmanager import Notification, enqueue_alerts
 from opspilot.apps.api.auth import ApiAccess
 from opspilot.apps.api.events import TERMINAL, status_events
 from opspilot.investigations import InvestigationStore
+from opspilot.live_metrics import configured_live_metrics
+from opspilot.live_traces import configured_live_traces
+from opspilot.operational_metrics import configure_metrics
 from opspilot.telemetry import configure_tracing
 from opspilot.triage import route_incident
 from opspilot.wakeup import configured_wakeup
@@ -55,8 +58,12 @@ def create_app(
     *,
     on_enqueue: Callable[[], None] | None = None,
     access: ApiAccess | None = None,
+    live_scenarios: frozenset[str] = frozenset(),
+    publish_metrics: bool = False,
 ) -> FastAPI:
     store = InvestigationStore(database, captures, on_enqueue=on_enqueue)
+    if publish_metrics:
+        configure_metrics("api", store.queue_depth)
     app = FastAPI(title="OpsPilot")
     access = access or ApiAccess()
     read_access = [Depends(access.require("operator", "reviewer"))]
@@ -99,7 +106,7 @@ def create_app(
         dependencies=[Depends(access.require("webhook"))],
     )
     def accept_alerts(notification: Notification) -> dict:
-        return enqueue_alerts(notification, store)
+        return enqueue_alerts(notification, store, live_scenarios)
 
     @app.get("/v1/investigations/{investigation_id}", dependencies=read_access)
     def get_investigation(investigation_id: UUID) -> dict:
@@ -166,12 +173,18 @@ def create_app(
 
 def local_app() -> FastAPI:
     configure_tracing()
+    live_metrics = configured_live_metrics()
+    live_scenarios = set(live_metrics.queries) if live_metrics else set()
+    if configured_live_traces():
+        live_scenarios.add("payment-failure")
     credentials = os.environ.get("OPSPILOT_API_CREDENTIALS")
     return create_app(
         os.environ.get("OPSPILOT_DATABASE_DSN")
         or Path(os.environ.get("OPSPILOT_DB", "opspilot.sqlite3")),
         Path(os.environ.get("OPSPILOT_CAPTURES", "testbed/scenarios")),
         on_enqueue=configured_wakeup().notify,
+        publish_metrics=True,
+        live_scenarios=frozenset(live_scenarios),
         access=ApiAccess.from_file(
             Path(credentials) if credentials is not None else None
         ),

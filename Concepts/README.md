@@ -1,5 +1,8 @@
 # Learn OpsPilot by building it
 
+Start with the [full project walkthrough](00-project-walkthrough.md) for an
+end-to-end explanation and hands-on exercises.
+
 Start with [Telemetry and deterministic replay](01-telemetry-and-replay.md). Run the CLI first, then trace an observation back to the CSV that produced it.
 Continue with [Structured logs and evidence coverage](02-structured-logs.md) and
 [Change events and time correlation](03-change-correlation.md), then run the
@@ -63,3 +66,15 @@ Read [Authentication, authorization, and approval identity](26-authenticated-app
 Read [Durable LangGraph checkpoints](27-langgraph-checkpoints.md).
 
 Read [Evaluation traces and Langfuse](28-langfuse-evaluation-traces.md).
+
+Read [Controlled fault experiments](29-controlled-fault-experiments.md).
+
+Read [Alert-driven evidence collection](30-alert-driven-evidence.md).
+
+Read [Rollout activity as incident evidence](31-kubernetes-rollout-evidence.md).
+
+Read [Model context minimization and bounded retries](32-model-context-and-retries.md).
+
+Read [Partial evidence and graceful degradation](33-partial-evidence.md).
+
+Read [Measuring investigation latency](34-investigation-latency.md).

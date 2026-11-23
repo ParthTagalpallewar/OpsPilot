@@ -1,0 +1,76 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "payment"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "logRecords": [
+            {
+              "timeUnixNano": "1795400040985000000",
+              "severityNumber": 13,
+              "body": {
+                "stringValue": "Payment request failed. Invalid token. demo.user_context.loyalty_level=gold"
+              },
+              "traceId": "8e5d70d99975122ed6f553837655ba73",
+              "spanId": "8e315ae5c324a335"
+            },
+            {
+              "timeUnixNano": "1795400041001000000",
+              "severityNumber": 13,
+              "body": {
+                "stringValue": "Payment request failed. Invalid token. demo.user_context.loyalty_level=gold"
+              },
+              "traceId": "4a372054ccd3bbe4939e802af6cd7153",
+              "spanId": "7a7a4515d6201614"
+            },
+            {
+              "timeUnixNano": "1795400041013000000",
+              "severityNumber": 13,
+              "body": {
+                "stringValue": "Payment request failed. Invalid token. demo.user_context.loyalty_level=gold"
+              },
+              "traceId": "b6a1e9841abbc81129baf90b66ac32ab",
+              "spanId": "fc980571d5be56f3"
+            },
+            {
+              "timeUnixNano": "1795400041021000000",
+              "severityNumber": 13,
+              "body": {
+                "stringValue": "Payment request failed. Invalid token. demo.user_context.loyalty_level=gold"
+              },
+              "traceId": "248999185bd779497c5b2a06cbd4bbd8",
+              "spanId": "e3c5f9903e627473"
+            },
+            {
+              "timeUnixNano": "1795400041032000000",
+              "severityNumber": 13,
+              "body": {
+                "stringValue": "Payment request failed. Invalid token. demo.user_context.loyalty_level=gold"
+              },
+              "traceId": "8a8379b340c50f4719a4cda771878451",
+              "spanId": "2ff3da531c17aaeb"
+            },
+            {
+              "timeUnixNano": "1795400041044000000",
+              "severityNumber": 13,
+              "body": {
+                "stringValue": "Payment request failed. Invalid token. demo.user_context.loyalty_level=gold"
+              },
+              "traceId": "ddf95397ae4c91f864727a2f3a98ebe1",
+              "spanId": "bbd9e0dcca0109aa"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

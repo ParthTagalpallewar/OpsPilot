@@ -27,6 +27,12 @@ OpsPilot investigates production incidents the way an on-call engineer would: it
 
 ---
 
+## Learn or continue the project
+
+Read the [beginner walkthrough](Concepts/00-project-walkthrough.md) to follow
+an incident from evidence to review. The [developer handoff](docs/developer-handoff.md)
+covers current verification and the Kubernetes starting point.
+
 ## Why OpsPilot
 
 When a payment API starts returning 500 errors after a release, an engineer typically has to check application logs, review CPU and memory, look at recent deployments, search internal docs, and then decide on a fix. OpsPilot automates that investigation loop.
@@ -282,11 +288,32 @@ To add an OTLP JSON log export to that capture directory, run
 selects timestamped Payment warnings and errors with text bodies and preserves
 their trace and span IDs when present.
 
+For a measured example, replay the
+[controlled Payment capture](testbed/captures/payment-controlled/README.md).
+It contains matched warnings, failed spans, and request counts. The
+[Checkout-to-Payment capture](testbed/captures/checkout-payment/README.md)
+also shows how the failure propagated to Checkout.
+
+### Import Kubernetes rollout evidence
+
+Export ReplicaSets from your local cluster and freeze the records for one
+Deployment into the directory holding its metric capture:
+
+```bash
+kubectl get replicasets -n demo -o json > replicasets.json
+uv run opspilot import-rollouts ad-high-cpu replicasets.json \
+  --namespace demo --deployment ad --output PATH
+uv run opspilot replay ad-high-cpu --captures PATH
+```
+
+Replay can correlate ReplicaSet creation with metric changes. To verify rollout
+completion or user impact, compare readiness and request telemetry.
+
 ### Request a Claude explanation
 
 Set `ANTHROPIC_API_KEY` and `OPSPILOT_CLAUDE_MODEL` in your shell, then run
 `uv run opspilot replay ad-high-cpu --with-claude`. This sends the demo's
-aggregate evidence and retrieved runbook section to the Claude Messages API.
+aggregate evidence and any reviewed runbook section to the Claude Messages API.
 Run the standard replay command for an offline report.
 
 ### Run the local replay API
@@ -373,6 +400,47 @@ alert rule with `opspilot_scenario` set to `ad-high-cpu`, `email-memory-leak`, o
 and the local worker processes the corresponding frozen captures. Repeat
 deliveries with the same fingerprint and start time reuse the investigation.
 
+### Capture fresh metrics from an alert
+
+Set `OPSPILOT_PROMETHEUS_URL` and at least one of `OPSPILOT_PROMQL_AD` or
+`OPSPILOT_PROMQL_EMAIL` in both the API and worker. Set `opspilot_mode: live`
+and the corresponding `opspilot_scenario` on the alert. Each configured
+expression must return one percentage series. The worker queries the baseline
+and incident windows ending near the alert time, then writes a snapshot under
+`OPSPILOT_LIVE_CAPTURES` (default `live-captures/`).
+
+Configure a shared writable capture directory if multiple workers may reclaim
+a job. The report can be reproduced with the CLI using the investigation's
+capture directory.
+
+For Payment, set `OPSPILOT_JAEGER_URL` in both processes. Use
+`opspilot_mode: live` and `opspilot_scenario: payment-failure` as the alert
+labels. The worker searches up to 20 Payment traces in the ten minutes before
+the alert for a completed failed span. To pin a known trace, supply a
+32-character hexadecimal ID in the optional `opspilot_trace_id` annotation.
+Include Jaeger's configured URL prefix in `OPSPILOT_JAEGER_URL` (for example,
+`http://localhost:8080/jaeger/ui` in the OpenTelemetry Demo). The worker saves
+the selected failed trace
+under the same capture root. Optionally set `OPSPILOT_PAYMENT_LOG_EXPORT`
+on the worker to a readable OTLP JSON or Collector file-exporter JSONL file.
+The worker freezes warnings for the chosen trace and marks coverage partial
+if the configured export has no match or cannot be read. To add aggregate
+rates, set `OPSPILOT_PROMETHEUS_URL` and `OPSPILOT_PROMQL_PAYMENT_FAILURE_RATE`
+on the worker. The query must return one percentage series in the range
+0 to 100. The report displays the mean sampled rate for each window.
+
+For the OpenTelemetry Demo, the following query uses the Collector's
+span-derived counter. Server spans count the Payment side of the request.
+The fallback supplies a zero numerator when no error series exists, and the
+denominator filter leaves samples absent when there is no request traffic.
+
+```promql
+100 * (
+  sum(rate(traces_span_metrics_calls_total{service_name="payment",span_kind="SPAN_KIND_SERVER",status_code="STATUS_CODE_ERROR"}[5m]))
+  or 0 * sum(rate(traces_span_metrics_calls_total{service_name="payment",span_kind="SPAN_KIND_SERVER"}[5m]))
+) / (sum(rate(traces_span_metrics_calls_total{service_name="payment",span_kind="SPAN_KIND_SERVER"}[5m])) > 0)
+```
+
 ### Configure authenticated API access
 
 Set `OPSPILOT_API_CREDENTIALS` to a JSON file containing a list of objects
@@ -457,6 +525,17 @@ To send evaluator observations to a Langfuse project, set
 receives the evaluation JSON. The exported observations contain aggregate
 checks and a reference dataset hash.
 
+Set `OPSPILOT_METRICS=console` to inspect operational metrics on stderr, or
+use `OPSPILOT_METRICS=otlp` with `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`. The API
+observes available queue depth and approval wait. Workers report finalized
+outcomes and processing duration. The optional Claude client records token usage
+when available.
+
+To measure the queued replay path against either running Compose demo, run
+`python3 infra/docker/benchmark_replay.py --jobs 30 --concurrency 5`. The
+benchmark reports HTTP enqueue-to-completion latency from the SSE stream,
+excluding human review. It uses the local frozen captures.
+
 ## Evaluation
 
 Run `uv run opspilot eval` from the repository root to check the frozen demo
@@ -464,6 +543,10 @@ reports against the reference expectations. The command prints JSON with
 per-scenario results and returns exit status 1 when any scenario fails. Ad and
 Email also check that a unique leading hypothesis matches the recorded injected
 cause. Payment checks that the report withholds a hypothesis.
+
+Run `uv run opspilot eval --ground-truth testbed/ground_truth/extended.json`
+to check healthy readings, conflicting changes, look-ahead prevention, and
+the measured Checkout-to-Payment log and span links. CI runs both suites.
 
 
 OpsPilot has no real production incidents to learn from, so it makes its own:
@@ -477,7 +560,7 @@ OpsPilot has no real production incidents to learn from, so it makes its own:
 
 - **Read-only tools.** Telemetry access uses read-only credentials.
 - **Logs are untrusted input.** Log content is wrapped as quoted data and can never change tool permissions or agent behavior.
-- **Redaction.** Secrets and PII are removed before data reaches the LLM.
+- **Model context.** Claude receives selected demo summaries and reviewed runbook text. Raw logs and free-text incident content stay local.
 - **Human approval.** Nothing is executed without explicit approval, and plans expire after a TTL. Approvals are bound to a hash of the exact plan that was reviewed.
 - **Budget guards.** Hard caps on steps and tokens per investigation. When a cap trips, the agent returns a partial report.
 - **Rule-capped confidence.** Confidence is computed from temporal alignment, agreeing evidence types, runbook match, and contradicting evidence. The LLM can explain it but cannot raise it.

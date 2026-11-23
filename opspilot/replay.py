@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
@@ -14,6 +15,7 @@ from opspilot.evidence.changes import correlate_changes, read_changes
 from opspilot.evidence.logs import summarize_logs
 from opspilot.evidence.metrics import summarize_capture
 from opspilot.evidence.prometheus import compare_windows
+from opspilot.evidence.request_counts import read_payment_counts
 from opspilot.evidence.runbooks import retrieve_runbooks
 from opspilot.evidence.traces import correlate_log_spans, read_failed_spans
 from opspilot.hypotheses import rank_resource_hypotheses
@@ -38,11 +40,43 @@ class ReplayState(TypedDict):
     changes: NotRequired[list[dict]]
     logs: NotRequired[list[dict]]
     trace_errors: NotRequired[list[dict]]
+    request_counts: NotRequired[list[dict]]
+    failure_rates: NotRequired[list[dict]]
     report: NotRequired[dict]
+    source_issues: NotRequired[list[dict[str, str]]]
 
 
 def replay_cutoff(state: ReplayState) -> datetime | None:
     return datetime.fromisoformat(state["as_of"]) if state.get("as_of") else None
+
+
+def collect_source(
+    path: Path,
+    read: Callable[[], list[dict]],
+    issues: list[dict[str, str]],
+    *,
+    required: bool = False,
+) -> list[dict]:
+    try:
+        return read()
+    except FileNotFoundError:
+        if not required:
+            return []
+        reason = "missing"
+    except OSError:
+        reason = "unreadable"
+    except ValueError:
+        reason = "invalid"
+    issues.append({"source": path.name, "reason": reason})
+    return []
+
+
+def read_collection_issue(path: Path, source: str) -> list[dict]:
+    status = json.loads(path.read_bytes())
+    reason = status.get("reason") if isinstance(status, dict) else None
+    if reason not in ("missing", "unreadable", "no_match", "invalid", "unavailable"):
+        raise ValueError("Invalid collection status")
+    return [{"source": source, "reason": reason}]
 
 
 @tracer.start_as_current_span(
@@ -54,36 +88,55 @@ def collect_resource_evidence(state: ReplayState) -> dict:
     service, metric, _ = METRIC_SCENARIOS[state["scenario"]]
     captures = Path(state["captures"])
     cutoff = replay_cutoff(state)
+    issues: list[dict[str, str]] = []
     prometheus = captures / f"{service}-prometheus.json"
-    if prometheus.is_file():
-        windows = compare_windows(
-            json.loads(prometheus.read_text(encoding="utf-8")),
+    if prometheus.exists():
+        windows = collect_source(
             prometheus,
-            service,
-            metric,
-            as_of=cutoff,
+            lambda: compare_windows(
+                json.loads(prometheus.read_text(encoding="utf-8")),
+                prometheus,
+                service,
+                metric,
+                as_of=cutoff,
+            ),
+            issues,
+            required=True,
         )
     else:
         windows = []
         for phase in ("baseline", "fault"):
+            path = captures / f"{service}-stats-{phase}.csv"
             windows.extend(
-                summarize_capture(
-                    captures / f"{service}-stats-{phase}.csv",
-                    metric,
-                    service,
-                    phase,
-                    as_of=cutoff,
+                collect_source(
+                    path,
+                    partial(
+                        summarize_capture, path, metric, service, phase, as_of=cutoff
+                    ),
+                    issues,
+                    required=True,
                 )
             )
     windows.sort(
         key=lambda record: (record["phase"], datetime.fromisoformat(record["start"]))
     )
+    changes = []
+    for category, prefix in (("changes", "change"), ("rollouts", "rollout")):
+        path = captures / f"{service}-{category}.csv"
+        changes.extend(
+            collect_source(
+                path,
+                partial(read_changes, path, service, as_of=cutoff, id_prefix=prefix),
+                issues,
+            )
+        )
+    if not windows and not changes and issues:
+        raise ValueError("No usable resource evidence could be loaded")
     return {
         "service": service,
         "windows": windows,
-        "changes": read_changes(
-            captures / f"{service}-changes.csv", service, as_of=cutoff
-        ),
+        "changes": changes,
+        "source_issues": issues,
     }
 
 
@@ -95,15 +148,57 @@ def collect_resource_evidence(state: ReplayState) -> dict:
 def collect_payment_logs(state: ReplayState) -> dict:
     captures = Path(state["captures"])
     cutoff = replay_cutoff(state)
+    issues: list[dict[str, str]] = []
     trace_path = captures / "payment-traces.json"
-    traces = read_failed_spans(trace_path, "payment", as_of=cutoff)
-    try:
-        logs = summarize_logs(captures / "payment-logs.jsonl", "payment", as_of=cutoff)
-    except FileNotFoundError:
-        if not traces and not (cutoff is not None and trace_path.is_file()):
-            raise
-        logs = []
-    return {"service": "payment", "logs": logs, "trace_errors": traces}
+    log_path = captures / "payment-logs.jsonl"
+    count_path = captures / "payment-requests.json"
+    rate_path = captures / "payment-prometheus.json"
+    if not any(path.exists() for path in (trace_path, log_path, count_path, rate_path)):
+        raise FileNotFoundError("No Payment capture files were found")
+    traces = collect_source(
+        trace_path,
+        lambda: read_failed_spans(trace_path, "payment", as_of=cutoff),
+        issues,
+    )
+    logs = collect_source(
+        log_path, lambda: summarize_logs(log_path, "payment", as_of=cutoff), issues
+    )
+    for evidence, filename, source in (
+        (trace_path, "payment-trace-collection.json", "payment_jaeger"),
+        (log_path, "payment-log-collection.json", "payment_log_export"),
+        (rate_path, "payment-metrics-collection.json", "payment_prometheus"),
+    ):
+        if not evidence.exists():
+            status = captures / filename
+            issues.extend(
+                collect_source(
+                    status, partial(read_collection_issue, status, source), issues
+                )
+            )
+    rates = collect_source(
+        rate_path,
+        lambda: compare_windows(
+            json.loads(rate_path.read_text(encoding="utf-8")),
+            rate_path,
+            "payment",
+            "payment_failure_percent",
+            as_of=cutoff,
+        ),
+        issues,
+    )
+    counts = collect_source(
+        count_path, lambda: read_payment_counts(count_path, as_of=cutoff), issues
+    )
+    if not (traces or logs or counts or rates) and issues:
+        raise ValueError("No usable Payment evidence could be loaded")
+    return {
+        "service": "payment",
+        "logs": logs,
+        "trace_errors": traces,
+        "request_counts": counts,
+        "failure_rates": rates,
+        "source_issues": issues,
+    }
 
 
 @tracer.start_as_current_span(
@@ -147,7 +242,13 @@ def report_resources(state: ReplayState) -> dict:
     ]
     aligned = correlate_changes(windows, changes)
     observations.extend(aligned)
-    hypotheses = rank_resource_hypotheses(windows, changes, aligned, service, label)
+    change_coverage = not any(
+        issue["source"].endswith(("-changes.csv", "-rollouts.csv"))
+        for issue in state.get("source_issues", [])
+    )
+    hypotheses = rank_resource_hypotheses(
+        windows, changes if change_coverage else [], aligned, service, label
+    )
     leading = [item for item in hypotheses if item["rank"] == 1]
     hypothesis = None
     if hypotheses:
@@ -176,6 +277,8 @@ def report_resources(state: ReplayState) -> dict:
 def report_payment(state: ReplayState) -> dict:
     logs = state["logs"]
     traces = state["trace_errors"]
+    counts = state["request_counts"]
+    rates = state["failure_rates"]
     return {
         "report": {
             "scenario": state["scenario"],
@@ -205,15 +308,40 @@ def report_payment(state: ReplayState) -> dict:
                 }
                 for record in traces
             ]
-            + correlate_log_spans(logs, traces),
+            + correlate_log_spans(logs, traces)
+            + [
+                {
+                    "statement": (
+                        f"In the {record['phase']} {record['target_service']} client "
+                        "batch, "
+                        f"{record['failed']} of {record['total']} requests failed "
+                        f"({record['failure_percent']:.2f}%)."
+                    ),
+                    "evidence_ids": [record["id"]],
+                }
+                for record in counts
+            ]
+            + [
+                {
+                    "statement": (
+                        f"The {record['phase']} window's mean sampled Payment "
+                        f"failure rate was {record['mean']:.2f}%."
+                    ),
+                    "evidence_ids": [record["id"]],
+                }
+                for record in rates
+            ],
             "hypothesis": None,
             "hypotheses": [],
             "limitation": (
-                "Failure rates require "
-                "total request counts. Attributing cause requires "
-                "corroborating evidence."
+                "Client batch counts describe the sampled requests only."
+                if counts
+                else "The mean of sampled rates is a window summary."
+                if rates
+                else "Failure rates require total request counts. "
+                "Attributing cause requires corroborating evidence."
             ),
-            "evidence": [*logs, *traces],
+            "evidence": [*logs, *traces, *counts, *rates],
         }
     }
 
@@ -229,16 +357,22 @@ def evidence_route(state: ReplayState):
 )
 def attach_runbook(state: ReplayState) -> dict:
     report = state["report"]
+    issues = list(state.get("source_issues", []))
     symptom = report["scenario"]
     if state.get("logs"):
         symptom += " " + state["logs"][0]["message"][:300]
+    matches = []
     if state.get("as_of"):
-        return {"report": {**report, "as_of": state["as_of"], "guidance": []}}
-    matches = retrieve_runbooks(
-        Path(state["captures"]).parent / "runbooks",
-        report["service"],
-        symptom,
-    )
+        report = {**report, "as_of": state["as_of"]}
+    else:
+        matches = retrieve_runbooks(
+            Path(state["captures"]).parent / "runbooks",
+            report["service"],
+            symptom,
+            issues=issues,
+        )
+    if issues:
+        report = {**report, "coverage": "partial", "source_issues": issues}
     return {
         "report": {
             **report,
