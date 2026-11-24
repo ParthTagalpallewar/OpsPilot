@@ -269,78 +269,72 @@ def report_resources(state: ReplayState) -> dict:
     }
 
 
+def cite(statement: str, record: dict) -> dict:
+    return {"statement": statement, "evidence_ids": [record["id"]]}
+
+
+def span_statement(record: dict) -> str:
+    parent = record["parent_service"]
+    suffix = f" with a direct parent span from {parent}." if parent else "."
+    return f"Payment span {record['operation']} recorded error status{suffix}"
+
+
+def payment_limitation(counts: list[dict], rates: list[dict]) -> str:
+    if counts:
+        return "Client batch counts describe the sampled requests only."
+    if rates:
+        return "The mean of sampled rates is a window summary."
+    return (
+        "Failure rates require total request counts. "
+        "Attributing cause requires corroborating evidence."
+    )
+
+
 @tracer.start_as_current_span(
     "opspilot.replay.report_payment",
     record_exception=False,
     set_status_on_exception=False,
 )
 def report_payment(state: ReplayState) -> dict:
-    logs = state["logs"]
-    traces = state["trace_errors"]
-    counts = state["request_counts"]
-    rates = state["failure_rates"]
+    logs, traces = state["logs"], state["trace_errors"]
+    counts, rates = state["request_counts"], state["failure_rates"]
+    observations = [
+        *(
+            cite(
+                f"Captured {record['count']} payment log record(s) "
+                f"at {record['severity']} level.",
+                record,
+            )
+            for record in logs
+        ),
+        *(cite(span_statement(record), record) for record in traces),
+        *correlate_log_spans(logs, traces),
+        *(
+            cite(
+                f"In the {record['phase']} {record['target_service']} client batch, "
+                f"{record['failed']} of {record['total']} requests failed "
+                f"({record['failure_percent']:.2f}%).",
+                record,
+            )
+            for record in counts
+        ),
+        *(
+            cite(
+                f"The {record['phase']} window's mean sampled Payment "
+                f"failure rate was {record['mean']:.2f}%.",
+                record,
+            )
+            for record in rates
+        ),
+    ]
     return {
         "report": {
             "scenario": state["scenario"],
             "service": state["service"],
-            "observations": [
-                {
-                    "statement": (
-                        f"Captured {record['count']} payment log record(s) "
-                        f"at {record['severity']} level."
-                    ),
-                    "evidence_ids": [record["id"]],
-                }
-                for record in logs
-            ]
-            + [
-                {
-                    "statement": (
-                        f"Payment span {record['operation']} recorded error status"
-                        + (
-                            " with a direct parent span from "
-                            f"{record['parent_service']}."
-                            if record["parent_service"]
-                            else "."
-                        )
-                    ),
-                    "evidence_ids": [record["id"]],
-                }
-                for record in traces
-            ]
-            + correlate_log_spans(logs, traces)
-            + [
-                {
-                    "statement": (
-                        f"In the {record['phase']} {record['target_service']} client "
-                        "batch, "
-                        f"{record['failed']} of {record['total']} requests failed "
-                        f"({record['failure_percent']:.2f}%)."
-                    ),
-                    "evidence_ids": [record["id"]],
-                }
-                for record in counts
-            ]
-            + [
-                {
-                    "statement": (
-                        f"The {record['phase']} window's mean sampled Payment "
-                        f"failure rate was {record['mean']:.2f}%."
-                    ),
-                    "evidence_ids": [record["id"]],
-                }
-                for record in rates
-            ],
+            "observations": observations,
             "hypothesis": None,
             "hypotheses": [],
-            "limitation": (
-                "Client batch counts describe the sampled requests only."
-                if counts
-                else "The mean of sampled rates is a window summary."
-                if rates
-                else "Failure rates require total request counts. "
-                "Attributing cause requires corroborating evidence."
-            ),
+            "limitation": payment_limitation(counts, rates),
             "evidence": [*logs, *traces, *counts, *rates],
         }
     }
