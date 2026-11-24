@@ -37,7 +37,13 @@ def test_expired_worker_cannot_overwrite_reclaimed_job(tmp_path):
             assert started.wait(5)
             assert store.get(queued["investigation_id"])["status"] == "running"
             assert not store.process_next()
+            with store.database.session() as connection:
+                (old_token,) = connection.execute(
+                    "SELECT claim_token FROM replay_jobs WHERE investigation_id = ?",
+                    (queued["investigation_id"],),
+                ).fetchone()
             clock.return_value = 161
+            assert not store._renew_lease(queued["investigation_id"], old_token)
             assert store.process_next()
         finally:
             release.set()
@@ -137,3 +143,52 @@ def test_failed_job_names_the_unavailable_telemetry(tmp_path, scenario, live, er
     assert store.process_next()
     document = store.get(queued["investigation_id"])
     assert (document["status"], document["error"]) == ("failed", error)
+
+
+def test_active_worker_renews_lease_past_original_expiry(tmp_path, monkeypatch):
+    database = tmp_path / "queue.db"
+    worker = InvestigationStore(database, CAPTURES)
+    competitor = InvestigationStore(database, CAPTURES)
+    queued = worker.create("ad-high-cpu", "Ad CPU", "Demo replay", queued=True)
+    investigation_id = queued["investigation_id"]
+    started, release, renewed = Event(), Event(), Event()
+    report = investigate("ad-high-cpu", CAPTURES)
+    renew = worker._renew_lease
+
+    def run_replay(*args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return report
+
+    def record_renewal(job_id, token):
+        result = renew(job_id, token)
+        if result and clock.return_value == 145:
+            renewed.set()
+        return result
+
+    monkeypatch.setattr("opspilot.investigations.LEASE_RENEWAL_SECONDS", 0.01)
+    monkeypatch.setattr(worker, "_renew_lease", record_renewal)
+    with (
+        patch("opspilot.investigations.investigate", side_effect=run_replay),
+        patch("opspilot.investigations.time", return_value=100) as clock,
+    ):
+        running = Thread(target=worker.process_next)
+        running.start()
+        try:
+            assert started.wait(5)
+            clock.return_value = 145
+            assert renewed.wait(5)
+            clock.return_value = 161
+            assert competitor.queue_depth() == 0
+            assert not competitor.process_next()
+        finally:
+            release.set()
+            running.join(5)
+
+    assert not running.is_alive()
+    assert worker.get(investigation_id)["report"] == report
+    assert [event["status"] for event in worker.events_after(investigation_id, 0)] == [
+        "queued",
+        "running",
+        "completed",
+    ]

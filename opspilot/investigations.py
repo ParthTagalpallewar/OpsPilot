@@ -1,10 +1,12 @@
 """Persist local replay investigations, jobs, and approvals."""
 
 import json
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from sqlite3 import Connection
+from threading import Event, Thread
 from time import monotonic, time
 from uuid import uuid4
 
@@ -22,6 +24,9 @@ from opspilot.telemetry import start_span
 
 propagator = TraceContextTextMapPropagator()
 MAX_JOB_ATTEMPTS = 3
+JOB_LEASE_SECONDS = 60
+LEASE_RENEWAL_SECONDS = 15
+logger = logging.getLogger(__name__)
 
 
 class InvestigationStore:
@@ -302,12 +307,57 @@ class InvestigationStore:
             connection.execute(
                 "UPDATE replay_jobs SET claim_token = ?, lease_until = ?, "
                 "attempts = attempts + 1 WHERE investigation_id = ?",
-                (token, now + 60, investigation_id),
+                (token, now + JOB_LEASE_SECONDS, investigation_id),
             )
             document["status"] = "running"
             self._save(connection, document)
             self._record_status(connection, document)
 
+        stop = Event()
+        heartbeat = Thread(
+            target=self._renew_lease_until_stopped,
+            args=(investigation_id, token, stop),
+            name="opspilot-lease-renewal",
+        )
+        heartbeat.start()
+        try:
+            self._run_claimed_job(investigation_id, scenario, token, document, carrier)
+        finally:
+            stop.set()
+            heartbeat.join()
+        return True
+
+    def _renew_lease(self, investigation_id: str, token: str) -> bool:
+        with self.database.session(write=True) as connection:
+            now = time()
+            matched = connection.execute(
+                "UPDATE replay_jobs SET lease_until = ? "
+                "WHERE investigation_id = ? AND claim_token = ? AND lease_until > ?",
+                (now + JOB_LEASE_SECONDS, investigation_id, token, now),
+            ).rowcount
+        return bool(matched)
+
+    def _renew_lease_until_stopped(
+        self, investigation_id: str, token: str, stop: Event
+    ) -> None:
+        while not stop.wait(LEASE_RENEWAL_SECONDS):
+            try:
+                if not self._renew_lease(investigation_id, token):
+                    return
+            except Exception:
+                # A transient database failure leaves time to retry before expiry.
+                logger.warning(
+                    "Could not renew lease for %s", investigation_id, exc_info=True
+                )
+
+    def _run_claimed_job(
+        self,
+        investigation_id: str,
+        scenario: str,
+        token: str,
+        document: dict,
+        carrier: tuple[str] | None,
+    ) -> None:
         started = monotonic()
         with start_span(
             "opspilot.worker.run",
@@ -355,7 +405,6 @@ class InvestigationStore:
             attributes = {"opspilot.outcome": outcome}
             worker_duration.record(monotonic() - started, attributes)
             worker_outcomes.add(1, attributes)
-        return True
 
     def _capture_directory(
         self, investigation_id: str, token: str, scenario: str, document: dict

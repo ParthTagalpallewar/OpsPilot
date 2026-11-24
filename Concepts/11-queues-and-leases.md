@@ -13,3 +13,10 @@ The worker loop survives errors outside a replay, such as a locked database: it 
 ## Practice
 
 Submit a queued incident using the API docs. Use the response's `Location` to check the queued status. Run the worker with `--once` and fetch the same location again. Compare this with an HTTP 201 synchronous replay. Then start the worker without `--once`, send it `kill -TERM`, and check that it exits with status 0.
+
+An active worker renews its 60-second lease every 15 seconds, including while a
+telemetry request is in progress. The renewal only succeeds if the claim token
+still matches and the lease has yet to expire. If the process exits or loses
+database access long enough for the lease to expire, another worker can claim
+the job. The claim token also protects the report from writes by an older worker
+after another worker has claimed the job.
