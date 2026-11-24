@@ -18,7 +18,7 @@ from opspilot.live_traces import LivePaymentTraces
 from opspilot.operational_metrics import review_wait, worker_duration, worker_outcomes
 from opspilot.replay import SCENARIOS, investigate
 from opspilot.storage import InvestigationDatabase, PostgresConnection
-from opspilot.telemetry import tracer
+from opspilot.telemetry import start_span
 
 propagator = TraceContextTextMapPropagator()
 
@@ -145,11 +145,7 @@ class InvestigationStore:
             for sequence, status, recorded_at, step in rows
         ]
 
-    @tracer.start_as_current_span(
-        "opspilot.incident.accept",
-        record_exception=False,
-        set_status_on_exception=False,
-    )
+    @start_span("opspilot.incident.accept")
     def create(
         self,
         scenario: str,
@@ -294,12 +290,10 @@ class InvestigationStore:
             self._record_status(connection, document)
 
         started = monotonic()
-        with tracer.start_as_current_span(
+        with start_span(
             "opspilot.worker.run",
             context=propagator.extract(json.loads(carrier[0]) if carrier else {}),
             attributes={"opspilot.investigation_id": investigation_id},
-            record_exception=False,
-            set_status_on_exception=False,
         ) as span:
             try:
                 captures = self.captures

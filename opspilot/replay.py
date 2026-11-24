@@ -20,7 +20,7 @@ from opspilot.evidence.runbooks import retrieve_runbooks
 from opspilot.evidence.traces import correlate_log_spans, read_failed_spans
 from opspilot.hypotheses import rank_resource_hypotheses
 from opspilot.reasoning import explain_report
-from opspilot.telemetry import tracer
+from opspilot.telemetry import start_span
 
 METRIC_SCENARIOS = {
     "ad-high-cpu": ("ad", "cpu_percent", "CPU"),
@@ -79,11 +79,7 @@ def read_collection_issue(path: Path, source: str) -> list[dict]:
     return [{"source": source, "reason": reason}]
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.collect_resource_evidence",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+@start_span("opspilot.replay.collect_resource_evidence")
 def collect_resource_evidence(state: ReplayState) -> dict:
     service, metric, _ = METRIC_SCENARIOS[state["scenario"]]
     captures = Path(state["captures"])
@@ -140,11 +136,7 @@ def collect_resource_evidence(state: ReplayState) -> dict:
     }
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.collect_payment_logs",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+@start_span("opspilot.replay.collect_payment_logs")
 def collect_payment_logs(state: ReplayState) -> dict:
     captures = Path(state["captures"])
     cutoff = replay_cutoff(state)
@@ -201,11 +193,7 @@ def collect_payment_logs(state: ReplayState) -> dict:
     }
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.report_resources",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+@start_span("opspilot.replay.report_resources")
 def report_resources(state: ReplayState) -> dict:
     windows, changes = state["windows"], state["changes"]
     service = state["service"]
@@ -290,11 +278,7 @@ def payment_limitation(counts: list[dict], rates: list[dict]) -> str:
     )
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.report_payment",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+@start_span("opspilot.replay.report_payment")
 def report_payment(state: ReplayState) -> dict:
     logs, traces = state["logs"], state["trace_errors"]
     counts, rates = state["request_counts"], state["failure_rates"]
@@ -344,11 +328,7 @@ def evidence_route(state: ReplayState):
     return "payment" if state["scenario"] == "payment-failure" else "resources"
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.attach_runbook",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+@start_span("opspilot.replay.attach_runbook")
 def attach_runbook(state: ReplayState) -> dict:
     report = state["report"]
     issues = list(state.get("source_issues", []))
@@ -382,11 +362,7 @@ def attach_runbook(state: ReplayState) -> dict:
     }
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.validate_report",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+@start_span("opspilot.replay.validate_report")
 def validate_report(state: ReplayState) -> None:
     report = state["report"]
     evidence = report["evidence"]
@@ -401,9 +377,7 @@ def validate_report(state: ReplayState) -> None:
             raise ValueError("Report contains a claim without resolvable citations")
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.reason", record_exception=False, set_status_on_exception=False
-)
+@start_span("opspilot.replay.reason")
 def reason(state: ReplayState) -> dict:
     report = state["report"]
     return {"report": {**report, "model_explanation": explain_report(report)}}
@@ -459,12 +433,7 @@ def investigate(
         "with_claude": with_claude,
         "as_of": as_of.astimezone(UTC).isoformat() if as_of is not None else None,
     }
-    with tracer.start_as_current_span(
-        "opspilot.replay",
-        attributes={"opspilot.scenario": scenario},
-        record_exception=False,
-        set_status_on_exception=False,
-    ):
+    with start_span("opspilot.replay", attributes={"opspilot.scenario": scenario}):
         scope = (
             checkpoint_saver(*checkpoint) if checkpoint is not None else nullcontext()
         )

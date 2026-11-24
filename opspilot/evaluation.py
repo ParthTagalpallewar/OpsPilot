@@ -7,7 +7,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from opspilot.replay import SCENARIOS, investigate
-from opspilot.telemetry import tracer
+from opspilot.telemetry import start_span
 
 
 def matched_log_span(claim_records: list[dict]) -> tuple[str, str] | None:
@@ -108,9 +108,7 @@ def score_report(report: dict, expected: dict) -> dict:
     }
 
 
-@tracer.start_as_current_span(
-    "opspilot.eval", record_exception=False, set_status_on_exception=False
-)
+@start_span("opspilot.eval")
 def evaluate_replay(captures: Path, ground_truth: Path) -> dict:
     raw = ground_truth.read_bytes()
     digest = sha256(raw).hexdigest()
@@ -140,7 +138,7 @@ def evaluate_replay(captures: Path, ground_truth: Path) -> dict:
         case_captures = captures / expected.get("capture_dir", ".")
         cutoff = expected.get("as_of")
         as_of = datetime.fromisoformat(cutoff) if cutoff is not None else None
-        with tracer.start_as_current_span(
+        with start_span(
             "opspilot.eval.scenario",
             attributes={
                 "opspilot.scenario": scenario,
@@ -148,8 +146,6 @@ def evaluate_replay(captures: Path, ground_truth: Path) -> dict:
                 "opspilot.eval.ground_truth_sha256": digest,
                 "langfuse.observation.type": "evaluator",
             },
-            record_exception=False,
-            set_status_on_exception=False,
         ) as span:
             result = score_report(
                 investigate(scenario, case_captures, as_of=as_of), expected
