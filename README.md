@@ -517,7 +517,8 @@ Never commit `.env`. It is listed in `.gitignore`.
 | `GET` | `/v1/investigations/{id}` | Status, report, and evidence references |
 | `GET` | `/v1/investigations/{id}/events` | Server-sent events stream of investigation progress |
 | `POST` | `/v1/investigations/{id}/approval` | Approve, edit, or reject a remediation plan |
-| `GET` | `/v1/evidence/{evidence_id}` | Raw evidence, so any claim in a report can be audited |
+| `GET` | `/v1/investigations/{id}/evidence/{evidence_id}` | Raw evidence, so any claim in a report can be audited |
+| `GET` | `/v1/investigations/{id}/summary` | Markdown summary of a completed report (`409` until the report exists) |
 | `POST` | `/v1/webhooks/alertmanager` | Map an Alertmanager alert to an incident |
 
 ## Observe an investigation

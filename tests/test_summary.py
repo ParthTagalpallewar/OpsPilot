@@ -1,9 +1,15 @@
+import asyncio
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
+
+from httpx import ASGITransport, AsyncClient
 
 from opspilot import cli
+from opspilot.apps.api.auth import ApiAccess, ClientCredential
+from opspilot.apps.api.main import create_app
 from opspilot.replay import investigate
 from opspilot.summary import render_markdown
 
@@ -92,3 +98,64 @@ def test_replay_command_prints_markdown(monkeypatch, capsys):
     assert capsys.readouterr().out == render_markdown(
         investigate("ad-high-cpu", CAPTURES)
     )
+
+
+def test_summary_endpoint_serves_completed_reports_only(tmp_path):
+    app = create_app(tmp_path / "summary.db", CAPTURES)
+    incident = {"scenario": "ad-high-cpu", "title": "Ad CPU [page]", "description": "x"}
+
+    async def verify():
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post("/v1/incidents", json=incident)
+            summary = await client.get(created.headers["Location"] + "/summary")
+            assert summary.status_code == 200
+            assert summary.headers["content-type"] == "text/markdown; charset=utf-8"
+            assert summary.text == render_markdown(
+                created.json()["report"], title="Ad CPU [page]"
+            )
+
+            queued = await client.post(
+                "/v1/incidents", json={**incident, "queued": True}
+            )
+            pending = await client.get(queued.headers["Location"] + "/summary")
+            assert pending.status_code == 409
+            assert pending.json()["detail"].endswith("investigation is queued")
+            missing = await client.get(f"/v1/investigations/{uuid4()}/summary")
+            assert missing.status_code == 404
+
+    asyncio.run(verify())
+
+
+def test_summary_endpoint_requires_a_reader_credential(tmp_path):
+    operator, webhook = "o" * 32, "w" * 32
+    access = ApiAccess(
+        [
+            ClientCredential(principal="ops", role="operator", token=operator),
+            ClientCredential(principal="alerts", role="webhook", token=webhook),
+        ]
+    )
+    app = create_app(tmp_path / "secure.db", CAPTURES, access=access)
+
+    async def verify():
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/v1/incidents",
+                json={"scenario": "ad-high-cpu", "title": "Ad CPU", "description": "x"},
+                headers={"Authorization": f"Bearer {operator}"},
+            )
+            path = created.headers["Location"] + "/summary"
+            assert (await client.get(path)).status_code == 401
+            denied = await client.get(
+                path, headers={"Authorization": f"Bearer {webhook}"}
+            )
+            assert denied.status_code == 403
+            allowed = await client.get(
+                path, headers={"Authorization": f"Bearer {operator}"}
+            )
+            assert allowed.status_code == 200
+
+    asyncio.run(verify())
