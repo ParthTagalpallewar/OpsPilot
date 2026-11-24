@@ -315,30 +315,11 @@ class InvestigationStore:
             attributes={"opspilot.investigation_id": investigation_id},
         ) as span:
             try:
-                captures = self.captures
-                if document.get("capture_mode") == "live_trace":
-                    if self.live_traces is None:
-                        raise ValueError("Live traces are not configured on the worker")
-                    captures = self.live_traces.collect(
-                        investigation_id,
-                        document["live_trace_id"],
-                        datetime.fromisoformat(document["live_alert_at"]),
-                    )
-                    self._record_step(investigation_id, token, "capture_jaeger")
-                elif "live_alert_at" in document:
-                    if self.live_metrics is None:
-                        raise ValueError(
-                            "Live metrics are not configured on the worker"
-                        )
-                    captures = self.live_metrics.collect(
-                        investigation_id,
-                        scenario,
-                        datetime.fromisoformat(document["live_alert_at"]),
-                    )
-                    self._record_step(investigation_id, token, "capture_prometheus")
                 report = investigate(
                     scenario,
-                    captures,
+                    self._capture_directory(
+                        investigation_id, token, scenario, document
+                    ),
                     as_of=datetime.fromisoformat(document["as_of"])
                     if "as_of" in document
                     else None,
@@ -351,16 +332,7 @@ class InvestigationStore:
                 )
                 self._complete(document, report)
             except (OSError, ValueError):
-                document.update(
-                    status="failed",
-                    error=(
-                        "Live Jaeger telemetry is unavailable"
-                        if document.get("capture_mode") == "live_trace"
-                        else "Live Prometheus telemetry is unavailable"
-                        if "live_alert_at" in document
-                        else "Replay telemetry is unavailable"
-                    ),
-                )
+                document.update(status="failed", error=self._failure_message(document))
             span.set_attribute("opspilot.outcome", document["status"])
 
         with self.database.session(write=True) as connection:
@@ -384,6 +356,34 @@ class InvestigationStore:
             worker_duration.record(monotonic() - started, attributes)
             worker_outcomes.add(1, attributes)
         return True
+
+    def _capture_directory(
+        self, investigation_id: str, token: str, scenario: str, document: dict
+    ) -> Path:
+        if "live_alert_at" not in document:
+            return self.captures
+        alert_time = datetime.fromisoformat(document["live_alert_at"])
+        if document.get("capture_mode") == "live_trace":
+            if self.live_traces is None:
+                raise ValueError("Live traces are not configured on the worker")
+            captures = self.live_traces.collect(
+                investigation_id, document["live_trace_id"], alert_time
+            )
+            self._record_step(investigation_id, token, "capture_jaeger")
+        else:
+            if self.live_metrics is None:
+                raise ValueError("Live metrics are not configured on the worker")
+            captures = self.live_metrics.collect(investigation_id, scenario, alert_time)
+            self._record_step(investigation_id, token, "capture_prometheus")
+        return captures
+
+    @staticmethod
+    def _failure_message(document: dict) -> str:
+        if "live_alert_at" not in document:
+            return "Replay telemetry is unavailable"
+        if document.get("capture_mode") == "live_trace":
+            return "Live Jaeger telemetry is unavailable"
+        return "Live Prometheus telemetry is unavailable"
 
     def get(self, investigation_id: str) -> dict | None:
         with self.database.session() as connection:

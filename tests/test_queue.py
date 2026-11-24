@@ -112,3 +112,28 @@ def test_queue_created_before_attempt_tracking_still_processes(tmp_path):
     queued = store.create("ad-high-cpu", "Ad CPU", "Demo replay", queued=True)
     assert store.process_next()
     assert store.get(queued["investigation_id"])["status"] == "completed"
+
+
+@pytest.mark.parametrize(
+    ("scenario", "live", "error"),
+    [
+        ("ad-high-cpu", False, "Replay telemetry is unavailable"),
+        ("ad-high-cpu", True, "Live Prometheus telemetry is unavailable"),
+        ("payment-failure", True, "Live Jaeger telemetry is unavailable"),
+    ],
+)
+def test_failed_job_names_the_unavailable_telemetry(tmp_path, scenario, live, error):
+    store = InvestigationStore(tmp_path / "failed.db", tmp_path / "no-captures")
+    alert_at = "2026-11-23T02:30:00+00:00" if live else None
+    queued = store.create(
+        scenario,
+        "Alert",
+        "Demo replay",
+        queued=True,
+        alert_occurrence=f"a1:{alert_at}" if live else None,
+        live_alert_at=alert_at,
+    )
+
+    assert store.process_next()
+    document = store.get(queued["investigation_id"])
+    assert (document["status"], document["error"]) == ("failed", error)
