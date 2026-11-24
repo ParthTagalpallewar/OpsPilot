@@ -210,6 +210,11 @@ Payment logs. Resource captures include baseline comparisons and documented flag
 change intervals. The Payment capture
 contains a single warning excerpt preserved from the scenario notes. Each replay
 can also cite a runbook section from `testbed/runbooks` as troubleshooting guidance.
+
+Add `--format markdown` to print the same report as a Markdown summary for an
+incident channel or ticket. Every statement keeps its evidence IDs, and text
+quoted from telemetry is escaped so it cannot add links, HTML, or headings.
+
 Read the [concept lessons](Concepts/README.md) and the
 [development log](progress/2026-11-22-shared-compose.md).
 

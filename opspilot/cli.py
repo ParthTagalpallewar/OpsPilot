@@ -10,6 +10,7 @@ from opspilot.evidence.rollouts import import_rollouts
 from opspilot.evidence.traces import capture_payment_trace
 from opspilot.operational_metrics import configure_metrics
 from opspilot.replay import METRIC_SCENARIOS, SCENARIOS, investigate
+from opspilot.summary import render_markdown
 from opspilot.telemetry import configure_tracing
 
 
@@ -23,6 +24,12 @@ def main():
     )
     replay.add_argument(
         "--as-of", type=datetime.fromisoformat, help="Replay cutoff with UTC offset."
+    )
+    replay.add_argument(
+        "--format",
+        choices=("json", "markdown"),
+        default="json",
+        help="Print the report as JSON (default) or as a Markdown summary.",
     )
     evaluate = commands.add_parser("eval", help="Score the frozen demo replays.")
     evaluate.add_argument(
@@ -114,6 +121,9 @@ def main():
             )
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
-    print(json.dumps(report, indent=2))
+    if args.command == "replay" and args.format == "markdown":
+        print(render_markdown(report), end="")
+    else:
+        print(json.dumps(report, indent=2))
     if args.command == "eval":
         return int(report["passed_scenarios"] != report["total_scenarios"])
