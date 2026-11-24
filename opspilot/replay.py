@@ -20,7 +20,7 @@ from opspilot.evidence.runbooks import retrieve_runbooks
 from opspilot.evidence.traces import correlate_log_spans, read_failed_spans
 from opspilot.hypotheses import rank_resource_hypotheses
 from opspilot.reasoning import explain_report
-from opspilot.telemetry import tracer
+from opspilot.telemetry import start_span
 
 METRIC_SCENARIOS = {
     "ad-high-cpu": ("ad", "cpu_percent", "CPU"),
@@ -79,11 +79,7 @@ def read_collection_issue(path: Path, source: str) -> list[dict]:
     return [{"source": source, "reason": reason}]
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.collect_resource_evidence",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+@start_span("opspilot.replay.collect_resource_evidence")
 def collect_resource_evidence(state: ReplayState) -> dict:
     service, metric, _ = METRIC_SCENARIOS[state["scenario"]]
     captures = Path(state["captures"])
@@ -140,11 +136,7 @@ def collect_resource_evidence(state: ReplayState) -> dict:
     }
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.collect_payment_logs",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+@start_span("opspilot.replay.collect_payment_logs")
 def collect_payment_logs(state: ReplayState) -> dict:
     captures = Path(state["captures"])
     cutoff = replay_cutoff(state)
@@ -201,11 +193,7 @@ def collect_payment_logs(state: ReplayState) -> dict:
     }
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.report_resources",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+@start_span("opspilot.replay.report_resources")
 def report_resources(state: ReplayState) -> dict:
     windows, changes = state["windows"], state["changes"]
     service = state["service"]
@@ -269,78 +257,68 @@ def report_resources(state: ReplayState) -> dict:
     }
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.report_payment",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+def cite(statement: str, record: dict) -> dict:
+    return {"statement": statement, "evidence_ids": [record["id"]]}
+
+
+def span_statement(record: dict) -> str:
+    parent = record["parent_service"]
+    suffix = f" with a direct parent span from {parent}." if parent else "."
+    return f"Payment span {record['operation']} recorded error status{suffix}"
+
+
+def payment_limitation(counts: list[dict], rates: list[dict]) -> str:
+    if counts:
+        return "Client batch counts describe the sampled requests only."
+    if rates:
+        return "The mean of sampled rates is a window summary."
+    return (
+        "Failure rates require total request counts. "
+        "Attributing cause requires corroborating evidence."
+    )
+
+
+@start_span("opspilot.replay.report_payment")
 def report_payment(state: ReplayState) -> dict:
-    logs = state["logs"]
-    traces = state["trace_errors"]
-    counts = state["request_counts"]
-    rates = state["failure_rates"]
+    logs, traces = state["logs"], state["trace_errors"]
+    counts, rates = state["request_counts"], state["failure_rates"]
+    observations = [
+        *(
+            cite(
+                f"Captured {record['count']} payment log record(s) "
+                f"at {record['severity']} level.",
+                record,
+            )
+            for record in logs
+        ),
+        *(cite(span_statement(record), record) for record in traces),
+        *correlate_log_spans(logs, traces),
+        *(
+            cite(
+                f"In the {record['phase']} {record['target_service']} client batch, "
+                f"{record['failed']} of {record['total']} requests failed "
+                f"({record['failure_percent']:.2f}%).",
+                record,
+            )
+            for record in counts
+        ),
+        *(
+            cite(
+                f"The {record['phase']} window's mean sampled Payment "
+                f"failure rate was {record['mean']:.2f}%.",
+                record,
+            )
+            for record in rates
+        ),
+    ]
     return {
         "report": {
             "scenario": state["scenario"],
             "service": state["service"],
-            "observations": [
-                {
-                    "statement": (
-                        f"Captured {record['count']} payment log record(s) "
-                        f"at {record['severity']} level."
-                    ),
-                    "evidence_ids": [record["id"]],
-                }
-                for record in logs
-            ]
-            + [
-                {
-                    "statement": (
-                        f"Payment span {record['operation']} recorded error status"
-                        + (
-                            " with a direct parent span from "
-                            f"{record['parent_service']}."
-                            if record["parent_service"]
-                            else "."
-                        )
-                    ),
-                    "evidence_ids": [record["id"]],
-                }
-                for record in traces
-            ]
-            + correlate_log_spans(logs, traces)
-            + [
-                {
-                    "statement": (
-                        f"In the {record['phase']} {record['target_service']} client "
-                        "batch, "
-                        f"{record['failed']} of {record['total']} requests failed "
-                        f"({record['failure_percent']:.2f}%)."
-                    ),
-                    "evidence_ids": [record["id"]],
-                }
-                for record in counts
-            ]
-            + [
-                {
-                    "statement": (
-                        f"The {record['phase']} window's mean sampled Payment "
-                        f"failure rate was {record['mean']:.2f}%."
-                    ),
-                    "evidence_ids": [record["id"]],
-                }
-                for record in rates
-            ],
+            "observations": observations,
             "hypothesis": None,
             "hypotheses": [],
-            "limitation": (
-                "Client batch counts describe the sampled requests only."
-                if counts
-                else "The mean of sampled rates is a window summary."
-                if rates
-                else "Failure rates require total request counts. "
-                "Attributing cause requires corroborating evidence."
-            ),
+            "limitation": payment_limitation(counts, rates),
             "evidence": [*logs, *traces, *counts, *rates],
         }
     }
@@ -350,11 +328,7 @@ def evidence_route(state: ReplayState):
     return "payment" if state["scenario"] == "payment-failure" else "resources"
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.attach_runbook",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+@start_span("opspilot.replay.attach_runbook")
 def attach_runbook(state: ReplayState) -> dict:
     report = state["report"]
     issues = list(state.get("source_issues", []))
@@ -388,11 +362,7 @@ def attach_runbook(state: ReplayState) -> dict:
     }
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.validate_report",
-    record_exception=False,
-    set_status_on_exception=False,
-)
+@start_span("opspilot.replay.validate_report")
 def validate_report(state: ReplayState) -> None:
     report = state["report"]
     evidence = report["evidence"]
@@ -407,9 +377,7 @@ def validate_report(state: ReplayState) -> None:
             raise ValueError("Report contains a claim without resolvable citations")
 
 
-@tracer.start_as_current_span(
-    "opspilot.replay.reason", record_exception=False, set_status_on_exception=False
-)
+@start_span("opspilot.replay.reason")
 def reason(state: ReplayState) -> dict:
     report = state["report"]
     return {"report": {**report, "model_explanation": explain_report(report)}}
@@ -465,12 +433,7 @@ def investigate(
         "with_claude": with_claude,
         "as_of": as_of.astimezone(UTC).isoformat() if as_of is not None else None,
     }
-    with tracer.start_as_current_span(
-        "opspilot.replay",
-        attributes={"opspilot.scenario": scenario},
-        record_exception=False,
-        set_status_on_exception=False,
-    ):
+    with start_span("opspilot.replay", attributes={"opspilot.scenario": scenario}):
         scope = (
             checkpoint_saver(*checkpoint) if checkpoint is not None else nullcontext()
         )

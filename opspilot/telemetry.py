@@ -9,6 +9,13 @@ from opentelemetry import trace
 tracer = trace.get_tracer("opspilot")
 
 
+def start_span(name: str, **options):
+    # Exception messages can quote capture content, so spans never record them.
+    return tracer.start_as_current_span(
+        name, record_exception=False, set_status_on_exception=False, **options
+    )
+
+
 def langfuse_export_config() -> tuple[str, dict[str, str]]:
     host = os.environ.get("LANGFUSE_HOST", "").strip()
     public = os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip()

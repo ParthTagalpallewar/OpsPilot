@@ -18,9 +18,10 @@ from opspilot.live_traces import LivePaymentTraces
 from opspilot.operational_metrics import review_wait, worker_duration, worker_outcomes
 from opspilot.replay import SCENARIOS, investigate
 from opspilot.storage import InvestigationDatabase, PostgresConnection
-from opspilot.telemetry import tracer
+from opspilot.telemetry import start_span
 
 propagator = TraceContextTextMapPropagator()
+MAX_JOB_ATTEMPTS = 3
 
 
 class InvestigationStore:
@@ -97,21 +98,24 @@ class InvestigationStore:
                     step TEXT
                 )
             """)
-            if not postgres:
-                columns = {
-                    row[1]
-                    for row in connection.execute(
-                        "PRAGMA table_info(investigation_events)"
-                    )
-                }
-                if "step" not in columns:
-                    connection.execute(
-                        "ALTER TABLE investigation_events ADD COLUMN step TEXT"
-                    )
+            self._add_column(connection, "investigation_events", "step TEXT")
+            self._add_column(
+                connection, "replay_jobs", "attempts INTEGER NOT NULL DEFAULT 0"
+            )
             connection.execute("""
                 CREATE INDEX IF NOT EXISTS investigation_event_cursor
                 ON investigation_events (investigation_id, sequence)
             """)
+
+    def _add_column(
+        self, connection: Connection | PostgresConnection, table: str, column: str
+    ) -> None:
+        if self.database.postgres:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column}")
+            return
+        existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if column.split()[0] not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
 
     @staticmethod
     def _record_status(
@@ -145,11 +149,7 @@ class InvestigationStore:
             for sequence, status, recorded_at, step in rows
         ]
 
-    @tracer.start_as_current_span(
-        "opspilot.incident.accept",
-        record_exception=False,
-        set_status_on_exception=False,
-    )
+    @start_span("opspilot.incident.accept")
     def create(
         self,
         scenario: str,
@@ -271,61 +271,55 @@ class InvestigationStore:
         with self.database.session(write=True) as connection:
             now = time()
             job = connection.execute(
-                "SELECT investigation_id, scenario FROM replay_jobs "
+                "SELECT investigation_id, scenario, attempts FROM replay_jobs "
                 "WHERE lease_until IS NULL OR lease_until <= ? "
                 f"ORDER BY {self.database.job_order} LIMIT 1",
                 (now,),
             ).fetchone()
             if job is None:
                 return False
-            investigation_id, scenario = job
+            investigation_id, scenario, attempts = job
+            document = self._load(connection, investigation_id)
+            if attempts >= MAX_JOB_ATTEMPTS:
+                # Earlier claims never finished, so retrying again would loop forever.
+                for table in ("replay_jobs", "replay_job_trace"):
+                    connection.execute(
+                        f"DELETE FROM {table} WHERE investigation_id = ?",
+                        (investigation_id,),
+                    )
+                document.update(
+                    status="failed",
+                    error="Replay stopped after repeated worker failures",
+                )
+                self._save(connection, document)
+                self._record_status(connection, document)
+                worker_outcomes.add(1, {"opspilot.outcome": "failed"})
+                return True
             carrier = connection.execute(
                 "SELECT carrier FROM replay_job_trace WHERE investigation_id = ?",
                 (investigation_id,),
             ).fetchone()
             connection.execute(
-                "UPDATE replay_jobs SET claim_token = ?, lease_until = ? "
-                "WHERE investigation_id = ?",
+                "UPDATE replay_jobs SET claim_token = ?, lease_until = ?, "
+                "attempts = attempts + 1 WHERE investigation_id = ?",
                 (token, now + 60, investigation_id),
             )
-            document = self._load(connection, investigation_id)
             document["status"] = "running"
             self._save(connection, document)
             self._record_status(connection, document)
 
         started = monotonic()
-        with tracer.start_as_current_span(
+        with start_span(
             "opspilot.worker.run",
             context=propagator.extract(json.loads(carrier[0]) if carrier else {}),
             attributes={"opspilot.investigation_id": investigation_id},
-            record_exception=False,
-            set_status_on_exception=False,
         ) as span:
             try:
-                captures = self.captures
-                if document.get("capture_mode") == "live_trace":
-                    if self.live_traces is None:
-                        raise ValueError("Live traces are not configured on the worker")
-                    captures = self.live_traces.collect(
-                        investigation_id,
-                        document["live_trace_id"],
-                        datetime.fromisoformat(document["live_alert_at"]),
-                    )
-                    self._record_step(investigation_id, token, "capture_jaeger")
-                elif "live_alert_at" in document:
-                    if self.live_metrics is None:
-                        raise ValueError(
-                            "Live metrics are not configured on the worker"
-                        )
-                    captures = self.live_metrics.collect(
-                        investigation_id,
-                        scenario,
-                        datetime.fromisoformat(document["live_alert_at"]),
-                    )
-                    self._record_step(investigation_id, token, "capture_prometheus")
                 report = investigate(
                     scenario,
-                    captures,
+                    self._capture_directory(
+                        investigation_id, token, scenario, document
+                    ),
                     as_of=datetime.fromisoformat(document["as_of"])
                     if "as_of" in document
                     else None,
@@ -338,16 +332,7 @@ class InvestigationStore:
                 )
                 self._complete(document, report)
             except (OSError, ValueError):
-                document.update(
-                    status="failed",
-                    error=(
-                        "Live Jaeger telemetry is unavailable"
-                        if document.get("capture_mode") == "live_trace"
-                        else "Live Prometheus telemetry is unavailable"
-                        if "live_alert_at" in document
-                        else "Replay telemetry is unavailable"
-                    ),
-                )
+                document.update(status="failed", error=self._failure_message(document))
             span.set_attribute("opspilot.outcome", document["status"])
 
         with self.database.session(write=True) as connection:
@@ -371,6 +356,34 @@ class InvestigationStore:
             worker_duration.record(monotonic() - started, attributes)
             worker_outcomes.add(1, attributes)
         return True
+
+    def _capture_directory(
+        self, investigation_id: str, token: str, scenario: str, document: dict
+    ) -> Path:
+        if "live_alert_at" not in document:
+            return self.captures
+        alert_time = datetime.fromisoformat(document["live_alert_at"])
+        if document.get("capture_mode") == "live_trace":
+            if self.live_traces is None:
+                raise ValueError("Live traces are not configured on the worker")
+            captures = self.live_traces.collect(
+                investigation_id, document["live_trace_id"], alert_time
+            )
+            self._record_step(investigation_id, token, "capture_jaeger")
+        else:
+            if self.live_metrics is None:
+                raise ValueError("Live metrics are not configured on the worker")
+            captures = self.live_metrics.collect(investigation_id, scenario, alert_time)
+            self._record_step(investigation_id, token, "capture_prometheus")
+        return captures
+
+    @staticmethod
+    def _failure_message(document: dict) -> str:
+        if "live_alert_at" not in document:
+            return "Replay telemetry is unavailable"
+        if document.get("capture_mode") == "live_trace":
+            return "Live Jaeger telemetry is unavailable"
+        return "Live Prometheus telemetry is unavailable"
 
     def get(self, investigation_id: str) -> dict | None:
         with self.database.session() as connection:

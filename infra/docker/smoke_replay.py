@@ -87,6 +87,9 @@ def main() -> None:
                     raise RuntimeError("Status stream omitted the validation step")
                 if b'"status": "completed"' not in events:
                     raise RuntimeError("Status stream omitted the completed event")
+            with urlopen(BASE_URL + location + "/summary", timeout=5) as response:
+                if not response.read().startswith(b"# Incident report: ad-high-cpu"):
+                    raise RuntimeError("Summary endpoint did not render the report")
             verify_approval(location, investigation)
             print(f"Verified replay and approval {investigation['investigation_id']}")
             return

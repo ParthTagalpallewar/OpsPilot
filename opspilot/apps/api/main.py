@@ -18,6 +18,7 @@ from opspilot.investigations import InvestigationStore
 from opspilot.live_metrics import configured_live_metrics
 from opspilot.live_traces import configured_live_traces
 from opspilot.operational_metrics import configure_metrics
+from opspilot.summary import render_markdown
 from opspilot.telemetry import configure_tracing
 from opspilot.triage import route_incident
 from opspilot.wakeup import configured_wakeup
@@ -149,6 +150,26 @@ def create_app(
                 if record["id"] == evidence_id:
                     return record
         raise HTTPException(404, "Evidence not found")
+
+    @app.get(
+        "/v1/investigations/{investigation_id}/summary",
+        dependencies=read_access,
+        response_class=Response,
+        responses={200: {"content": {"text/markdown": {}}}},
+    )
+    def get_summary(investigation_id: UUID) -> Response:
+        document = store.get(str(investigation_id))
+        if document is None:
+            raise HTTPException(404, "Investigation not found")
+        if document.get("report") is None:
+            status = document["status"]
+            raise HTTPException(
+                409, f"No report is available while the investigation is {status}"
+            )
+        return Response(
+            render_markdown(document["report"], title=document["title"]),
+            media_type="text/markdown",
+        )
 
     @app.post("/v1/investigations/{investigation_id}/approval")
     def review_investigation(
