@@ -3,6 +3,7 @@
 import argparse
 import logging
 import os
+import signal
 from pathlib import Path
 from threading import Event
 
@@ -34,6 +35,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true", help="Process at most one job.")
     args = parser.parse_args()
+    stop = Event()
+    # Finish the current job, then exit. PID 1 in a container ignores SIGTERM otherwise.
+    signal.signal(signal.SIGTERM, lambda signum, frame: stop.set())
     logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     configure_tracing()
     configure_metrics("worker")
@@ -49,7 +53,7 @@ def main() -> None:
         store.process_next()
         return
     try:
-        serve(store, configured_wakeup(), Event())
+        serve(store, configured_wakeup(), stop)
     except KeyboardInterrupt:
         return
 
