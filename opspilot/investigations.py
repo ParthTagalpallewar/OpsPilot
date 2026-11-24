@@ -21,6 +21,7 @@ from opspilot.storage import InvestigationDatabase, PostgresConnection
 from opspilot.telemetry import start_span
 
 propagator = TraceContextTextMapPropagator()
+MAX_JOB_ATTEMPTS = 3
 
 
 class InvestigationStore:
@@ -97,21 +98,24 @@ class InvestigationStore:
                     step TEXT
                 )
             """)
-            if not postgres:
-                columns = {
-                    row[1]
-                    for row in connection.execute(
-                        "PRAGMA table_info(investigation_events)"
-                    )
-                }
-                if "step" not in columns:
-                    connection.execute(
-                        "ALTER TABLE investigation_events ADD COLUMN step TEXT"
-                    )
+            self._add_column(connection, "investigation_events", "step TEXT")
+            self._add_column(
+                connection, "replay_jobs", "attempts INTEGER NOT NULL DEFAULT 0"
+            )
             connection.execute("""
                 CREATE INDEX IF NOT EXISTS investigation_event_cursor
                 ON investigation_events (investigation_id, sequence)
             """)
+
+    def _add_column(
+        self, connection: Connection | PostgresConnection, table: str, column: str
+    ) -> None:
+        if self.database.postgres:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column}")
+            return
+        existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if column.split()[0] not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
 
     @staticmethod
     def _record_status(
@@ -267,24 +271,39 @@ class InvestigationStore:
         with self.database.session(write=True) as connection:
             now = time()
             job = connection.execute(
-                "SELECT investigation_id, scenario FROM replay_jobs "
+                "SELECT investigation_id, scenario, attempts FROM replay_jobs "
                 "WHERE lease_until IS NULL OR lease_until <= ? "
                 f"ORDER BY {self.database.job_order} LIMIT 1",
                 (now,),
             ).fetchone()
             if job is None:
                 return False
-            investigation_id, scenario = job
+            investigation_id, scenario, attempts = job
+            document = self._load(connection, investigation_id)
+            if attempts >= MAX_JOB_ATTEMPTS:
+                # Earlier claims never finished, so retrying again would loop forever.
+                for table in ("replay_jobs", "replay_job_trace"):
+                    connection.execute(
+                        f"DELETE FROM {table} WHERE investigation_id = ?",
+                        (investigation_id,),
+                    )
+                document.update(
+                    status="failed",
+                    error="Replay stopped after repeated worker failures",
+                )
+                self._save(connection, document)
+                self._record_status(connection, document)
+                worker_outcomes.add(1, {"opspilot.outcome": "failed"})
+                return True
             carrier = connection.execute(
                 "SELECT carrier FROM replay_job_trace WHERE investigation_id = ?",
                 (investigation_id,),
             ).fetchone()
             connection.execute(
-                "UPDATE replay_jobs SET claim_token = ?, lease_until = ? "
-                "WHERE investigation_id = ?",
+                "UPDATE replay_jobs SET claim_token = ?, lease_until = ?, "
+                "attempts = attempts + 1 WHERE investigation_id = ?",
                 (token, now + 60, investigation_id),
             )
-            document = self._load(connection, investigation_id)
             document["status"] = "running"
             self._save(connection, document)
             self._record_status(connection, document)

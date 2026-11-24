@@ -1,8 +1,12 @@
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 from threading import Event, Thread
 from unittest.mock import patch
 
-from opspilot.investigations import InvestigationStore
+import pytest
+
+from opspilot.investigations import MAX_JOB_ATTEMPTS, InvestigationStore
 from opspilot.replay import investigate
 
 CAPTURES = Path(__file__).resolve().parents[1] / "testbed" / "scenarios"
@@ -62,3 +66,49 @@ def test_enqueue_notifies_after_the_job_is_visible(tmp_path):
     queued = api.create("payment-failure", "Payment", "Demo warning", queued=True)
     assert notifications == [True]
     assert api.get(queued["investigation_id"])["status"] == "completed"
+
+
+def test_job_that_never_finishes_fails_after_its_attempts(tmp_path):
+    store = InvestigationStore(tmp_path / "poison.db", CAPTURES)
+    queued = store.create("ad-high-cpu", "Ad CPU", "Demo replay", queued=True)
+    investigation_id = queued["investigation_id"]
+
+    with (
+        patch("opspilot.investigations.investigate", side_effect=RuntimeError("bug")),
+        patch("opspilot.investigations.time") as clock,
+    ):
+        for attempt in range(MAX_JOB_ATTEMPTS):
+            clock.return_value = 100 + attempt * 61
+            with pytest.raises(RuntimeError):
+                store.process_next()
+        clock.return_value = 100 + MAX_JOB_ATTEMPTS * 61
+        assert store.process_next()
+
+    document = store.get(investigation_id)
+    assert document["status"] == "failed"
+    assert document["error"] == "Replay stopped after repeated worker failures"
+    assert not store.process_next()
+    assert [event["status"] for event in store.events_after(investigation_id, 0)] == [
+        "queued",
+        *["running"] * MAX_JOB_ATTEMPTS,
+        "failed",
+    ]
+
+
+def test_queue_created_before_attempt_tracking_still_processes(tmp_path):
+    database = tmp_path / "existing.db"
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute(
+            "CREATE TABLE replay_jobs (investigation_id TEXT PRIMARY KEY, "
+            "scenario TEXT NOT NULL, claim_token TEXT, lease_until REAL)"
+        )
+        connection.execute(
+            "CREATE TABLE investigation_events (sequence INTEGER PRIMARY KEY, "
+            "investigation_id TEXT NOT NULL, status TEXT NOT NULL, "
+            "recorded_at TEXT NOT NULL)"
+        )
+
+    store = InvestigationStore(database, CAPTURES)
+    queued = store.create("ad-high-cpu", "Ad CPU", "Demo replay", queued=True)
+    assert store.process_next()
+    assert store.get(queued["investigation_id"])["status"] == "completed"
