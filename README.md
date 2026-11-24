@@ -155,24 +155,26 @@ The stack is introduced incrementally. Components are added when the project nee
 ## Project structure
 
 ```
-opspilot/
-├── apps/
-│   ├── api/                # FastAPI backend
-│   └── worker/             # LangGraph agent worker
-├── packages/
-│   └── evidence/           # Deterministic Python investigation tools
+.
+├── opspilot/
+│   ├── apps/
+│   │   ├── api/            # FastAPI backend
+│   │   └── worker/         # Queue worker that runs replays
+│   ├── evidence/           # Deterministic, read-only evidence collectors
+│   ├── replay.py           # LangGraph replay workflow
+│   ├── investigations.py   # Investigation, job, and approval storage
+│   ├── evaluation.py       # Scoring against ground truth
+│   └── cli.py              # `opspilot` command
 ├── testbed/
-│   ├── scenarios/          # Incident generation scripts
-│   ├── ground_truth/       # Known root causes for each scenario
-│   └── snapshots/          # Frozen logs, metrics and traces
-├── evals/                  # AI agent evaluation
+│   ├── scenarios/          # Frozen telemetry for the three demo scenarios
+│   ├── captures/           # Additional measured and edge-case captures
+│   ├── ground_truth/       # Expected report contents used for scoring
+│   └── runbooks/           # Markdown runbooks used for retrieval
 ├── infra/
-│   └── docker/             # Docker Compose configuration
-├── tests/
-│   └── evidence/           # pytest tests for evidence tools
-├── .github/
-│   └── workflows/          # GitHub Actions CI pipeline
-├── .env.example
+│   ├── docker/             # Compose files, smoke test, and benchmark
+│   └── kubernetes/         # Local cluster manifests
+├── tests/                  # pytest suite
+├── .github/workflows/      # GitHub Actions CI pipeline
 ├── .python-version
 ├── pyproject.toml
 └── uv.lock
@@ -180,15 +182,14 @@ opspilot/
 
 | Directory | Responsibility |
 |---|---|
-| `apps/api` | FastAPI backend: incident intake, SSE streaming, approvals, evidence lookup |
-| `apps/worker` | LangGraph agent that plans and runs investigations |
-| `packages/evidence` | Deterministic, read-only tools for logs, metrics, traces, deployments, and runbook RAG. Plain Python, with no LLM calls |
-| `testbed/scenarios` | Scripts that inject known faults into the demo system |
-| `testbed/ground_truth` | The true root cause of every injected fault, used for scoring |
-| `testbed/snapshots` | Frozen telemetry so investigations can be replayed deterministically |
-| `evals` | Evaluation harness and scoring |
-| `infra/docker` | Docker Compose for local services (Postgres, Redis, and others) |
-| `tests/evidence` | Unit tests for the evidence tools |
+| `opspilot/apps/api` | FastAPI backend: incident intake, SSE streaming, approvals, evidence lookup |
+| `opspilot/apps/worker` | Worker that claims queued jobs and runs the replay workflow |
+| `opspilot/evidence` | Deterministic, read-only tools for logs, metrics, traces, deployments, and runbook retrieval. Plain Python, with no LLM calls |
+| `testbed/scenarios` | Frozen telemetry so investigations can be replayed deterministically |
+| `testbed/captures` | Measured captures and edge cases (healthy, ambiguous, cross-service) |
+| `testbed/ground_truth` | Expected evidence and causes for every evaluated case |
+| `infra/docker` | Docker Compose for the demo, PostgreSQL, and Redis |
+| `tests` | Unit and API tests |
 | `.github/workflows` | CI pipeline |
 
 ## Getting started
@@ -226,9 +227,6 @@ cd opspilot
 
 # Install dependencies
 uv sync
-
-# Create your local config
-cp .env.example .env
 
 # Verify the setup
 uv run pytest
@@ -490,14 +488,19 @@ OpsPilot is evaluated against the [OpenTelemetry Demo](https://opentelemetry.io/
 
 ## Configuration
 
-Configuration is loaded from environment variables. Copy `.env.example` to `.env` and fill in the values. The variables below are the expected set, so check `.env.example` for the current list.
+OpsPilot reads configuration only from environment variables; it does not load a `.env` file. The most common settings:
 
 | Variable | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude API access |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `REDIS_URL` | Redis connection string |
-| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | Langfuse tracing (cloud or self-hosted) |
+| `OPSPILOT_DB` | SQLite database file (default `opspilot.sqlite3`) |
+| `OPSPILOT_DATABASE_DSN` | PostgreSQL connection string; takes precedence over `OPSPILOT_DB` |
+| `OPSPILOT_CAPTURES` | Replay capture directory (default `testbed/scenarios`) |
+| `OPSPILOT_REDIS_URL`, `OPSPILOT_REDIS_KEY` | Optional Redis worker wake-up |
+| `OPSPILOT_API_CREDENTIALS` | Bearer credentials file; unset means local demo mode |
+| `ANTHROPIC_API_KEY`, `OPSPILOT_CLAUDE_MODEL` | Optional Claude explanation (`--with-claude`) |
+| `OPSPILOT_PROMETHEUS_URL`, `OPSPILOT_PROMQL_AD`, `OPSPILOT_PROMQL_EMAIL`, `OPSPILOT_PROMQL_PAYMENT_FAILURE_RATE`, `OPSPILOT_JAEGER_URL`, `OPSPILOT_PAYMENT_LOG_EXPORT`, `OPSPILOT_LIVE_CAPTURES` | Live capture for Alertmanager alerts |
+| `OPSPILOT_RUNBOOK_SEARCH`, `OPSPILOT_VECTOR_DSN` | Hybrid runbook retrieval |
+| `OPSPILOT_TRACING`, `OPSPILOT_METRICS`, `OTEL_EXPORTER_OTLP_*`, `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Tracing and metrics export |
 
 Never commit `.env`. It is listed in `.gitignore`.
 
