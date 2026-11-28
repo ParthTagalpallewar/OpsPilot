@@ -1,4 +1,5 @@
 """OpenTelemetry setup shared by the CLI, API, and worker."""
+"""The tracer in telemetry.py tracks OpsPilot’s own execution. The otlp mode in that file sends those spans out over HTTP."""
 
 import base64
 import os

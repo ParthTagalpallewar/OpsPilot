@@ -17,6 +17,8 @@ from opspilot.telemetry import configure_tracing
 def main():
     parser = argparse.ArgumentParser(description="Replay an OpsPilot investigation.")
     commands = parser.add_subparsers(dest="command")
+
+    #replay parser
     replay = commands.add_parser("replay", help="Analyze a captured demo incident.")
     replay.add_argument("scenario", choices=SCENARIOS)
     replay.add_argument(
@@ -31,10 +33,15 @@ def main():
         default="json",
         help="Print the report as JSON (default) or as a Markdown summary.",
     )
+
+
+    #evaluate parser
     evaluate = commands.add_parser("eval", help="Score the frozen demo replays.")
     evaluate.add_argument(
         "--ground-truth", type=Path, default=Path("testbed/ground_truth/replay.json")
     )
+
+    #capture parser
     capture = commands.add_parser(
         "capture-metrics", help="Freeze two Prometheus percentage windows."
     )
@@ -51,17 +58,23 @@ def main():
     )
     capture.add_argument("--step", type=int, default=30)
     capture.add_argument("--output", required=True, type=Path)
+    
+    #capture trace parser
     capture_trace = commands.add_parser(
         "capture-payment-trace", help="Freeze a Payment error trace from Jaeger."
     )
     capture_trace.add_argument("--url", required=True)
     capture_trace.add_argument("--trace-id", required=True)
     capture_trace.add_argument("--output", required=True, type=Path)
+
+    #import log parser
     import_logs = commands.add_parser(
         "import-payment-logs", help="Freeze warnings and errors from an OTLP JSON file."
     )
     import_logs.add_argument("source", type=Path)
     import_logs.add_argument("--output", required=True, type=Path)
+
+    #rollout parser
     rollout = commands.add_parser(
         "import-rollouts", help="Freeze Deployment-owned Kubernetes ReplicaSets."
     )
@@ -70,6 +83,7 @@ def main():
     rollout.add_argument("--namespace", required=True)
     rollout.add_argument("--deployment", required=True)
     rollout.add_argument("--output", required=True, type=Path)
+    
     for command in (replay, evaluate):
         command.add_argument(
             "--captures",
@@ -78,6 +92,14 @@ def main():
             help="Directory containing the captured telemetry files.",
         )
     args = parser.parse_args()
+
+    #args get Namespace object Example  Namespace(
+    # command = "replay",
+    # senerio = "ad-high-cpu"
+    # format = "json"
+    # --with-claude = False
+    #)
+
     if args.command is None:
         parser.print_help()
         return
@@ -113,6 +135,8 @@ def main():
                 and args.captures.resolve() != Path("testbed/scenarios").resolve()
             ):
                 parser.error("--with-claude requires the repository demo captures")
+
+                
             report = investigate(
                 args.scenario,
                 args.captures,

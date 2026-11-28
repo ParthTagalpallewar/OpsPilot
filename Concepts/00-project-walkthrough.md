@@ -6,6 +6,35 @@ and produces a report you can check against those records. Each important
 claim points to the evidence behind it. A human can review a proposed
 follow-up and approve a dry-run preview.
 
+## Project workflow checklist
+
+This tracks the flows we've studied. Pick up next with **incident intake and the API**, which show how the replay logic is reached from an HTTP request.
+
+- [x] **CLI replay**
+  - [x] Follow the CLI arguments into `investigate()`, then trace LangGraph routing and state updates. [Replay graph](module-wise/replay/langraph-diagram.md)
+  - [x] Trace baseline and fault captures, change correlation, and hypothesis ranking. [Ad CPU walkthrough](module-wise/replay/replay-ad-module.md)
+  - [x] Trace Payment evidence collection and understand why the bundled warning leaves the hypothesis empty. [Payment walkthrough](module-wise/replay/replay-payment-module.md)
+  - [x] Follow runbook retrieval, citation validation, and JSON output. Explain when a worker uses a checkpointer and why the CLI replay can run without one.
+- [ ] **Incident intake and API**
+  - [ ] Start the local API and submit an incident with `POST /v1/incidents`.
+  - [ ] Trace request validation, scenario selection, and creation of the incident and investigation IDs.
+  - [ ] Compare an immediate response with a queued request. Retrieve the investigation and open a cited evidence record. [Intake and persistence](05-incident-api-and-persistence.md)
+- [ ] **Queued worker and progress**
+  - [ ] Follow a queued job from creation to claim, execution, and completion.
+  - [ ] Watch progress events and trace where the worker writes them.
+  - [ ] Follow a retry, then compare starting over with resuming PostgreSQL-backed graph state. [Queues and leases](11-queues-and-leases.md) · [Progress streaming](12-progress-streaming.md) · [Checkpoints](27-langgraph-checkpoints.md)
+- [ ] **Alertmanager and live evidence**
+  - [ ] Trace a firing alert from the webhook to the queued investigation. Check how repeat notifications are deduplicated.
+  - [ ] Compare an alert that triggers a saved replay with one that requests a fresh capture.
+  - [ ] Follow a Prometheus capture for Ad or Email and a Jaeger trace capture for Payment. Replay one saved output locally. [Alertmanager webhook](14-alertmanager-webhooks.md) · [Live evidence](30-alert-driven-evidence.md)
+- [ ] **Model explanation and human review**
+  - [ ] Trace what `--with-claude` sends to the model and how citations are checked.
+  - [ ] When a plan is available, follow the edit, approve, or reject path and inspect the dry-run preview and audit record. [Model grounding](09-model-grounding.md) · [Review and approval](06-human-approval.md)
+- [ ] **Evaluation, observability, and deployment**
+  - [ ] Run `opspilot eval` and compare the report with the expected evidence and hypotheses.
+  - [ ] Trace an investigation from the API to the worker and inspect the spans.
+  - [ ] Run the packaged demo and trace how the API and worker share configuration and storage. [Replay evaluation](04-replay-evaluation.md) · [Tracing](13-opentelemetry-instrumentation.md) · [Containers and CI](15-containers-and-ci.md)
+
 ## 1. Start with one incident
 
 Imagine the Ad service suddenly uses a lot of CPU. An engineer wants to
@@ -19,6 +48,8 @@ From the repository root, install dependencies with `uv sync`, then run:
 uv run opspilot replay ad-high-cpu > /tmp/opspilot-ad-report.json
 python3 -m json.tool /tmp/opspilot-ad-report.json
 ```
+Replay means investigating an incident again using data we already saved.
+Think of it like watching a match recording.
 
 A **replay** investigates saved evidence. It lets you study the same
 incident repeatedly without waiting for a real outage. This example needs

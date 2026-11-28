@@ -78,3 +78,5 @@ Read [Model context minimization and bounded retries](32-model-context-and-retri
 Read [Partial evidence and graceful degradation](33-partial-evidence.md).
 
 Read [Measuring investigation latency](34-investigation-latency.md).
+
+Practice following an investigation in the [debugger lab](35-debugger-lab.md).

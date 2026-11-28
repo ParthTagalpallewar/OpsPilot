@@ -29,7 +29,7 @@ METRIC_SCENARIOS = {
 
 SCENARIOS = (*METRIC_SCENARIOS, "payment-failure")
 
-
+#common langraph object shared between all nodes...
 class ReplayState(TypedDict):
     scenario: str
     captures: str
@@ -81,10 +81,13 @@ def read_collection_issue(path: Path, source: str) -> list[dict]:
 
 @start_span("opspilot.replay.collect_resource_evidence")
 def collect_resource_evidence(state: ReplayState) -> dict:
+    #service = ad and metric = cpu_percent
     service, metric, _ = METRIC_SCENARIOS[state["scenario"]]
+    #testbed/scenarios
     captures = Path(state["captures"])
     cutoff = replay_cutoff(state)
     issues: list[dict[str, str]] = []
+    #prometheus = testbed/scenarios/ad-prometheus.json 
     prometheus = captures / f"{service}-prometheus.json"
     if prometheus.exists():
         windows = collect_source(
@@ -103,6 +106,12 @@ def collect_resource_evidence(state: ReplayState) -> dict:
         windows = []
         for phase in ("baseline", "fault"):
             path = captures / f"{service}-stats-{phase}.csv"
+            """
+            At this point, read is a callable. The CSV is still unopened. 
+            When collect_source() calls read(), Python runs the equivalent of:
+            summarize_capture(path, metric, service, phase, as_of=cutoff)
+            """
+            
             windows.extend(
                 collect_source(
                     path,
@@ -192,7 +201,20 @@ def collect_payment_logs(state: ReplayState) -> dict:
         "source_issues": issues,
     }
 
+"""
+Input State: 
+    {
+        "scenario": "ad-high-cpu",
+        "captures": "testbed/scenarios",
+        "with_claude": False,
+        "as_of": None,
+        "service": "ad",
+        "windows": [baseline_summary, fault_summary],
+        "changes": [feature_flag_change],
+        "source_issues": [],
+    }
 
+"""
 @start_span("opspilot.replay.report_resources")
 def report_resources(state: ReplayState) -> dict:
     windows, changes = state["windows"], state["changes"]
@@ -255,6 +277,100 @@ def report_resources(state: ReplayState) -> dict:
             "evidence": [*windows, *changes],
         }
     }
+
+"""
+Output: 
+{
+  "report": {
+    "scenario": "ad-high-cpu",
+    "service": "ad",
+    "observations": [
+      {
+        "statement": "Mean CPU was 398.00% in the fault window (all) and 0.74% in the baseline window.",
+        "evidence_ids": ["ev_ad_baseline_all", "ev_ad_fault_all"]
+      },
+      {
+        "statement": "The documented interval for adHighCpu changing to on falls between the last reading of baseline (all) and the first reading of fault (all).",
+        "evidence_ids": ["ev_ad_baseline_all", "ev_change_ad_2", "ev_ad_fault_all"]
+      }
+    ],
+    "hypothesis": {
+      "rank": 1,
+      "cause": {
+        "kind": "feature_flag",
+        "name": "adHighCpu"
+      },
+      "confidence": "low",
+      "statement": "The timing makes the adHighCpu change a possible contributor to elevated CPU on ad.",
+      "evidence_ids": ["ev_ad_baseline_all", "ev_change_ad_2", "ev_ad_fault_all"],
+      "recommended_check": "Verify the change timeline and compare request volume, latency, and traces across the sampled windows."
+    },
+    "hypotheses": [
+      {
+        "rank": 1,
+        "cause": {
+          "kind": "feature_flag",
+          "name": "adHighCpu"
+        },
+        "confidence": "low",
+        "statement": "The timing makes the adHighCpu change a possible contributor to elevated CPU on ad.",
+        "evidence_ids": ["ev_ad_baseline_all", "ev_change_ad_2", "ev_ad_fault_all"],
+        "recommended_check": "Verify the change timeline and compare request volume, latency, and traces across the sampled windows."
+      },
+      {
+        "rank": 2,
+        "cause": null,
+        "confidence": "low",
+        "statement": "Elevated CPU on ad may contribute to the incident.",
+        "evidence_ids": ["ev_ad_baseline_all", "ev_ad_fault_all"],
+        "recommended_check": "Compare request latency and traces across the sampled windows."
+      }
+    ],
+    "limitation": "Resource readings and documented change intervals establish timing. Request traces and latency are needed to assess user impact.",
+    "evidence": [
+      {
+        "id": "ev_ad_baseline_all",
+        "source": "ad-stats-baseline.csv",
+        "phase": "baseline",
+        "variant": "all",
+        "metric": "cpu_percent",
+        "unit": "percent",
+        "start": "2026-11-21T14:20:55+00:00",
+        "end": "2026-11-21T14:30:19+00:00",
+        "samples": 19,
+        "mean": 0.74,
+        "peak": 2.17
+      },
+      {
+        "id": "ev_ad_fault_all",
+        "source": "ad-stats-fault.csv",
+        "phase": "fault",
+        "variant": "all",
+        "metric": "cpu_percent",
+        "unit": "percent",
+        "start": "2026-11-21T14:31:25+00:00",
+        "end": "2026-11-21T15:03:09+00:00",
+        "samples": 62,
+        "mean": 398.0,
+        "peak": 402.7
+      },
+      {
+        "kind": "feature_flag",
+        "name": "adHighCpu",
+        "value": "on",
+        "earliest": "2026-11-21T14:30:19+00:00",
+        "latest": "2026-11-21T14:31:25+00:00",
+        "origin": "ad-high-cpu.md",
+        "id": "ev_change_ad_2",
+        "type": "change_event",
+        "service": "ad",
+        "source": "ad-changes.csv",
+        "line": 2
+      }
+    ]
+  }
+}
+"""
 
 
 def cite(statement: str, record: dict) -> dict:
@@ -324,10 +440,6 @@ def report_payment(state: ReplayState) -> dict:
     }
 
 
-def evidence_route(state: ReplayState):
-    return "payment" if state["scenario"] == "payment-failure" else "resources"
-
-
 @start_span("opspilot.replay.attach_runbook")
 def attach_runbook(state: ReplayState) -> dict:
     report = state["report"]
@@ -385,17 +497,40 @@ def reason(state: ReplayState) -> dict:
 
 def build_replay_graph(checkpointer=None):
     graph = StateGraph(ReplayState)
+    """
+    Inputs from investigate-function:
+    {
+        "scenario": "ad-high-cpu",
+        "captures": "testbed/scenarios",
+        "with_claude": False,
+        "as_of": None,
+    }
+    """
     graph.add_node("collect_resources", collect_resource_evidence)
+    """
+    Output From collect_resource_evidence
+    {
+        "scenario": "ad-high-cpu",
+        "captures": "testbed/scenarios",
+        "with_claude": False,
+        "as_of": None,
+        "service": "ad",
+        "windows": [baseline_summary, fault_summary],
+        "changes": [feature_flag_change],
+        "source_issues": [],
+    }
+    """
     graph.add_node("collect_payment", collect_payment_logs)
     graph.add_node("report_resources", report_resources)
     graph.add_node("report_payment", report_payment)
     graph.add_node("retrieve_runbook", attach_runbook)
     graph.add_node("validate", validate_report)
     graph.add_node("reason", reason)
+
     graph.add_conditional_edges(
         START,
-        evidence_route,
-        {"resources": "collect_resources", "payment": "collect_payment"},
+        lambda state: "payment" if state["scenario"] == "payment-failure" else "resources",
+        {"payment": "collect_payment", "resources": "collect_resources"},
     )
     graph.add_edge("collect_resources", "report_resources")
     graph.add_edge("collect_payment", "report_payment")
@@ -433,6 +568,7 @@ def investigate(
         "with_claude": with_claude,
         "as_of": as_of.astimezone(UTC).isoformat() if as_of is not None else None,
     }
+    #understand this start_span
     with start_span("opspilot.replay", attributes={"opspilot.scenario": scenario}):
         scope = (
             checkpoint_saver(*checkpoint) if checkpoint is not None else nullcontext()

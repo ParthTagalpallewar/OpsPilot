@@ -1,0 +1,50 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        
+        {
+            "name": "OpsPilot: CLI Replay",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.venv/bin/opspilot",
+            "args": [
+                "replay",
+                "ad-high-cpu"
+            ],
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "OpsPilot: Local API",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "module": "uvicorn",
+            "args": [
+                "opspilot.apps.api.main:local_app",
+                "--factory",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "OpsPilot: Worker",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "opspilot.apps.worker.main",
+            "args": [
+                "--once"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

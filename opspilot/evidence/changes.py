@@ -56,7 +56,10 @@ def read_changes(
             )
     return evidence
 
-
+"""
+corelate logs we have in evidences or windows with changes done in that time frame
+changes like toggle on/off or deployment changes.
+"""
 def correlate_changes(windows: list[dict], changes: list[dict]) -> list[dict]:
     observations = []
     for before, after in zip(windows, windows[1:], strict=False):

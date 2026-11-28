@@ -14,7 +14,6 @@ from opspilot.evidence.vector_store import pgvector_order
 SECTION = re.compile(r"^## (.+)$", re.MULTILINE)
 WORD = re.compile(r"[a-z0-9]+")
 
-
 def sections(path: Path):
     document = path.read_text(encoding="utf-8")
     headings = list(SECTION.finditer(document))
@@ -77,6 +76,7 @@ def retrieve_runbooks(
     hybrid = os.environ.get("OPSPILOT_RUNBOOK_SEARCH") == "hybrid"
     vector_dsn = os.environ.get("OPSPILOT_VECTOR_DSN") if hybrid else None
     if hybrid:
+        #if title or excerpt contains word "ad" then add in list
         candidates = [
             (index, f"{heading}\n{excerpt}")
             for index, (_, _, heading, excerpt) in enumerate(chunks)
@@ -96,6 +96,7 @@ def retrieve_runbooks(
                 semantic_failed = True
                 issues.append({"source": "runbook_semantic", "reason": "unavailable"})
 
+    #used Reciprocal Rank Fusion (RRF): To rerank documents by combining BM25 and semantic search resuts
     scores = defaultdict(float)
     for ranking in (keywords, semantic):
         for rank, index in enumerate(ranking, start=1):
@@ -103,6 +104,15 @@ def retrieve_runbooks(
     if not scores:
         return []
 
+    #Select best document after RRF, 
+    """
+    working, 
+        1. get max rrf result with custom max function 
+        2. pass lamda that does following
+            a. first on basis of score of rrf
+            b. we make value smaller so it will pick bigger 
+            c. select doc with smaller index
+    """
     best = max(
         scores,
         key=lambda index: (
@@ -138,3 +148,41 @@ def retrieve_runbooks(
             "semantic_rank": semantic.index(best) + 1 if best in semantic else None,
         }
     return [record]
+
+
+
+"""
+Return Data Strutrue: list[dict]
+
+[
+    {
+        "id": f"ev_runbook_{sha256(signature).hexdigest()}",
+        "type": "runbook",
+        "source": source,
+        "line": line,
+        "heading": heading,
+        "excerpt": excerpt,
+        "query": query,
+        "retrival": { (only if hybrid search is enable)
+            "mode": (
+                "keyword_fallback"
+                if semantic_failed
+                else "semantic_fallback"
+                if keyword_failed
+                else "hybrid"
+            ),
+            "model": MODEL_NAME,
+            "vector_store": "pgvector" if vector_dsn else "memory",
+            "semantic_query": f"{service}: {symptom}",
+            "keyword_rank": keywords.index(best) + 1 if best in keywords else None,
+            "semantic_rank": semantic.index(best) + 1 if best in semantic else None,
+        }
+    },
+
+
+    
+
+]
+
+
+"""
